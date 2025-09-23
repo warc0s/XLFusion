@@ -327,7 +327,12 @@ def merge_hybrid(
 
     for i, path in enumerate(model_paths):
         print(f"Loading model {i} ({path.name})...")
-        states[i] = load_state(path)
+        try:
+            states[i] = load_state(path)
+        except Exception as e:
+            print(f"Error loading model {i}: {e}")
+            print("Consider using fewer models or freeing memory.")
+            raise
 
     # Start with backbone for complete structure
     merged = {}
@@ -367,7 +372,7 @@ def merge_hybrid(
             tensors = []
             used_weights = []
             for i, weight in enumerate(block_weight_list):
-                if weight > 0 and key in states[i]:
+                if weight > 0 and i < len(model_paths) and key in states[i]:
                     tensors.append(states[i][key])
                     used_weights.append(weight)
 
@@ -1215,7 +1220,17 @@ def main() -> int:
             except (KeyError, TypeError):
                 default_boost = 1.0  # Fallback if hybrid config missing
             boost_str = input(f"\nCross-attention boost [{default_boost}]: ").strip()
-            cross_attention_boost = float(boost_str) if boost_str else default_boost
+            if boost_str:
+                try:
+                    cross_attention_boost = float(boost_str)
+                    if cross_attention_boost < 0:
+                        print("Warning: Negative boost value, using default.")
+                        cross_attention_boost = default_boost
+                except ValueError:
+                    print("Invalid boost value, using default.")
+                    cross_attention_boost = default_boost
+            else:
+                cross_attention_boost = default_boost
 
             # Optional cross-attention locks
             use_locks = input("\nUse cross-attention locks? [n]: ").strip().lower() in ['y', 'yes']
@@ -1225,7 +1240,15 @@ def main() -> int:
                 locks = {}
                 for block_type in ["down", "mid", "up"]:
                     idx_str = input(f"  {block_type.capitalize()} attn2 model [0]: ").strip()
-                    locks[block_type] = int(idx_str) if idx_str.isdigit() else 0
+                    if idx_str.isdigit():
+                        idx = int(idx_str)
+                        if 0 <= idx < len(selected_models):
+                            locks[block_type] = idx
+                        else:
+                            print(f"Invalid index {idx}, using 0")
+                            locks[block_type] = 0
+                    else:
+                        locks[block_type] = 0
                 attn2_locks = locks
 
             # Execute hybrid merge
