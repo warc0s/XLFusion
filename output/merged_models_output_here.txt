@@ -1,0 +1,11 @@
+Merged checkpoint files will be saved in this directory.
+
+Output format:
+- Filename: XLFusion_V{number}.safetensors
+- Format: .safetensors (compatible with AUTOMATIC1111, ComfyUI, etc.)
+- Automatic versioning to prevent overwrites
+
+Each merged model includes:
+- Complete SDXL checkpoint (UNet + CLIP + VAE)
+- Embedded metadata with merge configuration
+- Compatible with all SDXL-compatible software

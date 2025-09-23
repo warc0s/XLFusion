@@ -1,0 +1,10 @@
+Place your SDXL checkpoint files (.safetensors) in this directory.
+
+Supported models:
+- Base SDXL checkpoints
+- SDXL derivatives (NoobAI, Illustrious, Pony, etc.)
+- Custom trained SDXL models
+
+File format: .safetensors
+Minimum required: 1 model (for single model operations)
+Recommended: 2-3 models for optimal merging results

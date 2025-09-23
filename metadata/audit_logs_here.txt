@@ -1,0 +1,13 @@
+Merge audit logs and metadata files are stored in this directory.
+
+Generated files:
+- meta_XLFusion_V{number}.txt - Human-readable merge configuration
+- Contains detailed information about:
+  - Source models used
+  - Merge mode and settings
+  - Block assignments (PerRes mode)
+  - Weights and multipliers (Legacy mode)
+  - LoRA information (Legacy mode)
+  - Timestamp and version tracking
+
+These logs help reproduce merges and understand model composition.

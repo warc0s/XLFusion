@@ -1,0 +1,12 @@
+Place your LoRA files (.safetensors) in this directory.
+
+Notes:
+- LoRAs are only supported in Legacy mode
+- PerRes mode does not support LoRA baking
+- Supported format: .safetensors
+- Compatible with SDXL LoRAs only
+
+Usage:
+- Select LoRAs during Legacy mode merge process
+- Specify scale/strength for each LoRA (recommended: 0.3-0.8)
+- LoRAs will be permanently baked into the merged model
