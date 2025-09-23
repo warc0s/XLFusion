@@ -67,12 +67,35 @@ The new Hybrid mode offers maximum flexibility by combining the best of Legacy a
 3. **Optional Features**: Cross-attention boost and locks for enhanced control
 4. **Result**: Perfect fusion with granular control over each aspect
 
+## Architecture
+
+XLFusion V1.1 features a **modular architecture** that separates merge functionality into specialized components for better maintainability and code organization.
+
+### Core Components
+
+- **XLFusion.py** - Main application with CLI interface, configuration management, and orchestration
+- **code-utils/** - Modular merge implementations:
+  - **legacy_merge.py** - Traditional weighted merging with LoRA support
+  - **perres_merge.py** - Resolution-based block assignment with CLI prompts
+  - **hybrid_merge.py** - Combined weighted + resolution control with configuration UI
+
+This modular design allows for:
+- **Clean separation** of merge algorithms
+- **Easy maintenance** and debugging of specific modes
+- **Extensibility** for future merge techniques
+- **Reusable components** across different interfaces
+
 ## Directory Structure
 
 ```
 XLFusion/
-├── XLFusion.py          # Main script
+├── XLFusion.py          # Main application script
 ├── config.yaml          # Centralized configuration
+├── code_utils/          # Modular merge components
+│   ├── legacy_merge.py  # Legacy mode implementation
+│   ├── perres_merge.py  # PerRes mode implementation
+│   ├── hybrid_merge.py  # Hybrid mode implementation
+│   └── __init__.py      # Python package initialization
 ├── models/              # Input checkpoint files
 ├── loras/               # LoRA files (Legacy mode only)
 ├── output/              # Merged model outputs
