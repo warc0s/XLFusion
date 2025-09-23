@@ -161,13 +161,26 @@ def prompt_select(items: List[Path], title: str, default_idx: List[int]) -> List
             if 0 <= k < len(items):
                 idx.append(k)
         except ValueError:
-            pass
+            print(f"Warning: '{tok}' is not a valid index, skipping.")
     idx = sorted(list(dict.fromkeys(idx)))
+
+    # Ensure at least one valid selection
+    if not idx and def_str:
+        print("No valid indices selected, using defaults.")
+        for i in default_idx:
+            if 0 <= i < len(items):
+                idx.append(i)
+        idx = sorted(list(dict.fromkeys(idx)))
+
     return idx
 
 
 def prompt_weights(names: List[str], suggestion: List[float]) -> List[float]:
     print("\nUNet weights per checkpoint.")
+    if not names:
+        print("Error: No model names provided.")
+        return []
+
     ws: List[float] = []
     for name, sug in zip(names, suggestion):
         raw = input(f"Weight for {name} [{sug}]: ").strip()
@@ -179,11 +192,18 @@ def prompt_weights(names: List[str], suggestion: List[float]) -> List[float]:
             except ValueError:
                 print("Invalid input. Using suggestion.")
                 ws.append(float(sug))
+
+    # Ensure we have weights
+    if not ws:
+        print("No weights provided. Using uniform distribution.")
+        ws = [1.0 for _ in names]
+
     s = sum(ws)
     if s <= 0:
         print("All weights were zero or invalid. Assigning uniform distribution.")
         ws = [1.0 for _ in ws]
         s = sum(ws)
+
     ws_norm = [w / s for w in ws]
     print("Normalized weights:")
     for name, w in zip(names, ws_norm):
@@ -192,10 +212,18 @@ def prompt_weights(names: List[str], suggestion: List[float]) -> List[float]:
 
 
 def pick_backbone(names: List[str], weights: Optional[List[float]] = None) -> int:
-    if weights:
+    if not names:
+        print("Error: No model names provided for backbone selection.")
+        return 0
+
+    if weights and len(weights) == len(names):
         by_w = sorted(list(enumerate(weights)), key=lambda x: x[1], reverse=True)
         default_idx = by_w[0][0]
     else:
+        default_idx = 0
+
+    # Ensure default_idx is valid
+    if default_idx >= len(names):
         default_idx = 0
 
     print(f"\nBackbone for CLIP and VAE")
@@ -207,9 +235,10 @@ def pick_backbone(names: List[str], weights: Optional[List[float]] = None) -> in
         idx = int(raw)
         if 0 <= idx < len(names):
             return idx
+        else:
+            print(f"Index {idx} out of range. Using default.")
     except ValueError:
-        pass
-    print("Invalid input. Using default.")
+        print("Invalid input format. Using default.")
     return default_idx
 
 
@@ -318,7 +347,12 @@ def prompt_loras(lora_files: List[Path]) -> List[Tuple[Path, float]]:
 # ---------------- Orchestration ----------------
 
 def main() -> int:
-    root = Path(__file__).resolve().parent
+    try:
+        root = Path(__file__).resolve().parent
+    except Exception:
+        # Fallback to current working directory if __file__ resolution fails
+        root = Path.cwd()
+        print("Warning: Using current working directory as project root.")
     models_dir, loras_dir, output_dir, metadata_dir = ensure_dirs(root)
 
     print("\n" + "="*60)
@@ -373,6 +407,9 @@ def main() -> int:
         default_model_idx = list(range(min(3, len(model_files))))
         selected_idx = prompt_select(model_files, "Select models to merge:", default_model_idx)
 
+        if not selected_idx:
+            print("\nNo models selected. Aborting.")
+            return 1
         if len(selected_idx) < 2:
             print("\nPerRes requires at least 2 models. Switching to Legacy mode...")
             mode = "legacy"
@@ -474,6 +511,9 @@ def main() -> int:
         default_model_idx = list(range(min(3, len(model_files))))
         selected_idx = prompt_select(model_files, "Select models to merge:", default_model_idx)
 
+        if not selected_idx:
+            print("\nNo models selected. Aborting.")
+            return 1
         if len(selected_idx) < 2:
             print("\nHybrid mode requires at least 2 models. Switching to Legacy mode...")
             mode = "legacy"
@@ -490,8 +530,8 @@ def main() -> int:
             # Cross-attention boost
             try:
                 config = load_config()
-                default_boost = config["merge_defaults"]["hybrid"]["cross_attention_boost"]
-            except (KeyError, TypeError):
+                default_boost = config.get("merge_defaults", {}).get("hybrid", {}).get("cross_attention_boost", 1.0)
+            except (KeyError, TypeError, AttributeError):
                 default_boost = 1.0  # Fallback if hybrid config missing
             boost_str = input(f"\nCross-attention boost [{default_boost}]: ").strip()
             if boost_str:

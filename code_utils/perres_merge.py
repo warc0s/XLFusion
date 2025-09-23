@@ -31,9 +31,18 @@ def merge_perres(
     """
     print("\nStarting PerRes fusion...")
 
+    # Validate backbone index
+    if backbone_idx < 0 or backbone_idx >= len(model_paths):
+        print(f"Error: Backbone index {backbone_idx} is out of range (0-{len(model_paths)-1})")
+        return {}
+
     # Load backbone for complete structure
     print(f"Loading backbone ({model_paths[backbone_idx].name})...")
-    backbone_state = load_state(model_paths[backbone_idx])
+    try:
+        backbone_state = load_state(model_paths[backbone_idx])
+    except Exception as e:
+        print(f"Error loading backbone model: {e}")
+        return {}
 
     # Load all needed models
     states = {}
@@ -41,10 +50,24 @@ def merge_perres(
     if attn2_locks:
         needed_indices.update(attn2_locks.values())
 
+    # Validate indices are within range
+    for idx in needed_indices:
+        if idx < 0 or idx >= len(model_paths):
+            print(f"Error: Model index {idx} is out of range (0-{len(model_paths)-1})")
+            return {}
+
     for idx in needed_indices:
         if idx not in states:
             print(f"Loading model {idx} ({model_paths[idx].name})...")
-            states[idx] = load_state(model_paths[idx])
+            try:
+                states[idx] = load_state(model_paths[idx])
+            except Exception as e:
+                print(f"Error loading model {idx}: {e}")
+                # Clean up loaded states
+                for loaded_idx in list(states.keys()):
+                    del states[loaded_idx]
+                gc.collect()
+                raise
 
     # Build final state
     merged = {}

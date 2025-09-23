@@ -36,9 +36,34 @@ Professional SDXL checkpoint merger with advanced fusion capabilities. Supports 
 
 - **Model Compatibility**: All SDXL derivatives (NoobAI, Illustrious, Pony, etc.)
 - **Format Support**: .safetensors input/output with A1111 compatibility
-- **Configurable System**: Centralized YAML configuration for all settings
+- **Configurable System**: Centralized YAML configuration
 - **Metadata Preservation**: Comprehensive audit logs and embedded metadata
 - **Automatic Versioning**: Prevents accidental overwrites with incremental naming
+
+## Installation
+
+### Requirements
+- Python 3.8 or higher
+- Required packages: `torch>=2.0.0`, `safetensors>=0.3.0`, `PyYAML>=6.0`
+
+### Setup
+```bash
+# Clone or download XLFusion
+cd XLFusion
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run (interactive CLI)
+python XLFusion.py
+# You should see the mode selection menu (Legacy / PerRes / Hybrid)
+```
+
+### Dependencies
+XLFusion requires minimal dependencies for maximum compatibility:
+- **torch** - PyTorch for tensor operations and model handling
+- **safetensors** - Fast and secure model format reading/writing
+- **PyYAML** - Configuration file parsing with fallback support
 
 ## Usage
 
@@ -52,6 +77,8 @@ Professional SDXL checkpoint merger with advanced fusion capabilities. Supports 
    - **[3] Hybrid** - Combined weighted + resolution control (V1.1)
 6. Follow interactive prompts for your selected mode
 7. Merged models are saved to `output/` with metadata logs in `metadata/`
+
+Note: The CLI is interactive (no flags yet). Batch/headsless jobs are planned for V1.2.
 
 ### Hybrid Mode Usage (V1.1)
 
@@ -69,37 +96,46 @@ The new Hybrid mode offers maximum flexibility by combining the best of Legacy a
 
 ## Architecture
 
-XLFusion V1.1 features a **modular architecture** that separates merge functionality into specialized components for better maintainability and code organization.
+XLFusion V1.1 features a **fully modular architecture** that completely separates merge functionality into specialized components for maximum maintainability, code reuse, and extensibility.
 
 ### Core Components
 
-- **XLFusion.py** - Main application with CLI interface, configuration management, and orchestration
-- **code-utils/** - Modular merge implementations:
-  - **legacy_merge.py** - Traditional weighted merging with LoRA support
-  - **perres_merge.py** - Resolution-based block assignment with CLI prompts
-  - **hybrid_merge.py** - Combined weighted + resolution control with configuration UI
+**Main Application**
+- **XLFusion.py** - Clean orchestration layer with CLI interface, configuration management, and mode selection
+- **config.yaml** - Centralized configuration with intelligent defaults and fallbacks
 
-This modular design allows for:
-- **Clean separation** of merge algorithms
-- **Easy maintenance** and debugging of specific modes
-- **Extensibility** for future merge techniques
-- **Reusable components** across different interfaces
+**Modular Merge Engines (`code_utils/`)**
+- **common.py** - Shared utilities, I/O functions, and helper methods used across all modes
+- **legacy_merge.py** - Traditional weighted merging with LoRA baking and cross-attention boost
+- **perres_merge.py** - Resolution-based block assignment with interactive configuration
+- **hybrid_merge.py** - Advanced weighted + resolution control with granular block configuration
+
+### Architecture Benefits
+
+This modular design provides:
+- **Clean Separation** - Each merge mode is isolated and self-contained
+- **Easy Maintenance** - Debug and modify specific modes independently
+- **Extensibility** - Add new merge modes without touching existing code
+- **Shared Utilities** - Common functions in `common.py` eliminate code duplication
+
+Performance note: PerRes and Hybrid may load multiple checkpoints simultaneously; on limited RAM consider merging with fewer bases or using Legacy (streaming merge for UNet).
 
 ## Directory Structure
 
 ```
 XLFusion/
-├── XLFusion.py          # Main application script
-├── config.yaml          # Centralized configuration
-├── code_utils/          # Modular merge components
-│   ├── legacy_merge.py  # Legacy mode implementation
-│   ├── perres_merge.py  # PerRes mode implementation
-│   ├── hybrid_merge.py  # Hybrid mode implementation
+├── XLFusion.py          # Main orchestration script (CLI + mode selection)
+├── config.yaml          # Centralized configuration with smart defaults
+├── code_utils/          # Modular merge engine components
+│   ├── common.py        # Shared utilities and I/O functions
+│   ├── legacy_merge.py  # Legacy weighted merge + LoRA baking
+│   ├── perres_merge.py  # Resolution-based block assignment
+│   ├── hybrid_merge.py  # Advanced weighted + resolution control
 │   └── __init__.py      # Python package initialization
-├── models/              # Input checkpoint files
-├── loras/               # LoRA files (Legacy mode only)
-├── output/              # Merged model outputs
-└── metadata/            # Audit logs and metadata
+├── models/              # Input checkpoint files (.safetensors)
+├── loras/               # LoRA files for Legacy mode (.safetensors)
+├── output/              # Merged model outputs with auto-versioning
+└── metadata/            # Detailed audit logs and merge metadata
 ```
 
 ## Output
@@ -110,18 +146,23 @@ XLFusion/
 
 ## Configuration
 
-XLFusion uses `config.yaml` for centralized configuration management. Key settings include:
+XLFusion uses `config.yaml` for centralized configuration management with intelligent defaults and automatic fallbacks.
 
 ### Model Output Settings
-- **Base Name**: Customize the base name for merged models
+- **Base Name**: Customize the base name for merged models (default: "XLFusion")
 - **Version Format**: Configure version numbering (V1, V2, v1, Ver1, etc.)
 - **Auto-Versioning**: Automatic increment to prevent overwrites
-- **Directory Paths**: Customize input/output folder locations
+- **Directory Paths**: Customize input/output folder locations with automatic creation
 
 ### Merge Mode Defaults
 - **Legacy Mode**: Default multipliers for down/mid/up blocks and cross-attention boost
-- **PerRes Mode**: Default cross-attention lock behavior
-- **Hybrid Mode**: Default cross-attention boost and lock settings for optimal performance
+- **PerRes Mode**: Default cross-attention lock behavior and block assignment preferences
+- **Hybrid Mode**: Default cross-attention boost and lock settings optimized for best results
+
+### Configuration Features
+- **Automatic Fallbacks**: Uses built-in defaults if `config.yaml` is missing
+- **Partial Configuration**: Missing sections use default values
+- **Safe Operation**: Handles malformed configuration gracefully
 
 ### Advanced Configuration
 

@@ -86,6 +86,7 @@ def stream_weighted_merge_from_paths(
                 acc_shape[k] = t.shape
             else:
                 if t.shape != acc_shape[k]:
+                    print(f"Warning: Shape mismatch for key {k}: expected {acc_shape[k]}, got {t.shape}")
                     continue
                 acc_sum[k].add_(eff * t.to(torch.float32))
                 acc_w[k] += eff
@@ -151,7 +152,12 @@ def apply_single_lora(
     lora_path: Path,
     scale: float,
 ) -> Tuple[int, int]:
-    lora_state = st_load(str(lora_path), device="cpu")
+    try:
+        lora_state = st_load(str(lora_path), device="cpu")
+    except Exception as e:
+        print(f"Error loading LoRA file {lora_path.name}: {e}")
+        return 0, 0
+
     meta = getattr(lora_state, "metadata", {})
     if not isinstance(meta, dict):
         meta = {}

@@ -35,6 +35,11 @@ def merge_hybrid(
     """
     print("\nStarting Hybrid fusion...")
 
+    # Validate backbone index
+    if backbone_idx < 0 or backbone_idx >= len(model_paths):
+        print(f"Error: Backbone index {backbone_idx} is out of range (0-{len(model_paths)-1})")
+        return {}
+
     # Load all models
     states = {}
     model_names = [p.name for p in model_paths]
@@ -46,6 +51,10 @@ def merge_hybrid(
         except Exception as e:
             print(f"Error loading model {i}: {e}")
             print("Consider using fewer models or freeing memory.")
+            # Clean up partially loaded states before failing
+            for idx in list(states.keys()):
+                del states[idx]
+            gc.collect()
             raise
 
     # Start with backbone for complete structure
@@ -81,6 +90,13 @@ def merge_hybrid(
         if block_group and block_group in block_weights:
             # Apply hybrid weighted merge for this block group
             block_weight_list = block_weights[block_group]
+
+            # Validate weight list length matches model count
+            if len(block_weight_list) != len(model_paths):
+                print(f"Warning: Block weights for {block_group} has {len(block_weight_list)} entries but {len(model_paths)} models provided")
+                # Fallback to backbone
+                merged[key] = backbone_state[key]
+                continue
 
             # Ensure we have tensors from all models for this key
             tensors = []
