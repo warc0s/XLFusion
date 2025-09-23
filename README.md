@@ -1,6 +1,6 @@
-# XLFusion V1.0
+# XLFusion V1.1
 
-Professional SDXL checkpoint merger with advanced fusion capabilities. Supports two distinct merging modes for optimal model combination and customization.
+Professional SDXL checkpoint merger with advanced fusion capabilities. Supports three distinct merging modes for optimal model combination and customization.
 
 ## Features
 
@@ -24,6 +24,14 @@ Professional SDXL checkpoint merger with advanced fusion capabilities. Supports 
 - Optional cross-attention locks for consistency
 - 100% block assignment without blending
 
+**Hybrid Mode (NEW in V1.1)**
+- Combines weighted blending with resolution-based control
+- Configure different weights for each resolution block group
+- Maximum flexibility: best of Legacy and PerRes modes
+- Granular control over composition, semantics, and style
+- Cross-attention boost and locks support
+- Perfect for complex multi-model fusion scenarios
+
 ### Technical Capabilities
 
 - **Model Compatibility**: All SDXL derivatives (NoobAI, Illustrious, Pony, etc.)
@@ -38,8 +46,26 @@ Professional SDXL checkpoint merger with advanced fusion capabilities. Supports 
 2. For Legacy mode: Place LoRA files (.safetensors) in the `loras/` directory
 3. (Optional) Customize settings in `config.yaml`
 4. Run the script: `python XLFusion.py`
-5. Select merge mode and follow interactive prompts
-6. Merged models are saved to `output/` with metadata logs in `metadata/`
+5. Select merge mode:
+   - **[1] Legacy** - Classic weighted merge with LoRA support
+   - **[2] PerRes** - Resolution-based block assignment
+   - **[3] Hybrid** - Combined weighted + resolution control (V1.1)
+6. Follow interactive prompts for your selected mode
+7. Merged models are saved to `output/` with metadata logs in `metadata/`
+
+### Hybrid Mode Usage (V1.1)
+
+The new Hybrid mode offers maximum flexibility by combining the best of Legacy and PerRes modes:
+
+1. **Model Selection**: Choose 2-4 models with complementary strengths
+2. **Block Weight Configuration**: Set different weights for each resolution block:
+   - Down 0,1 (64x, 32x) - Composition & Structure
+   - Down 2,3 (16x, 8x) - Semantic Details
+   - Mid (8x) - Abstract Processing
+   - Up 0,1 (8x, 16x) - Reconstruction
+   - Up 2,3 (32x, 64x) - Final Style & Textures
+3. **Optional Features**: Cross-attention boost and locks for enhanced control
+4. **Result**: Perfect fusion with granular control over each aspect
 
 ## Directory Structure
 
@@ -72,6 +98,7 @@ XLFusion uses `config.yaml` for centralized configuration management. Key settin
 ### Merge Mode Defaults
 - **Legacy Mode**: Default multipliers for down/mid/up blocks and cross-attention boost
 - **PerRes Mode**: Default cross-attention lock behavior
+- **Hybrid Mode**: Default cross-attention boost and lock settings for optimal performance
 
 ### Advanced Configuration
 
@@ -84,6 +111,12 @@ XLFusion uses `config.yaml` for centralized configuration management. Key settin
 - Weight-based merging with block-level multipliers
 - Cross-attention boost for enhanced text adherence
 - LoRA integration with customizable scaling
+
+#### Hybrid Mode (V1.1)
+- Configure weights per resolution block for maximum control
+- Combine the flexibility of Legacy with precision of PerRes
+- Perfect for complex fusion scenarios requiring different strengths per resolution
+- Supports cross-attention boost and optional locks
 
 ## Contact
 

@@ -73,6 +73,24 @@ merge_defaults:
     # false = independent attention | true = locked attention patterns
     cross_attention_locks: false
 
+  # Hybrid mode: Combined weighted merging with resolution-based control (V1.1+)
+  hybrid:
+    # Cross-attention boost factor (1.0 = no boost, >1.0 = enhanced prompt adherence)
+    cross_attention_boost: 1.0
+
+    # Cross-attention locks for improved prompt consistency across models
+    # false = independent attention | true = locked attention patterns
+    cross_attention_locks: false
+
+    # Default equal weight distribution for all resolution blocks
+    # These are fallback values if user doesn't specify custom weights
+    default_block_weights:
+      down_0_1: "equal"    # Composition & Structure (64x, 32x)
+      down_2_3: "equal"    # Semantic Details (16x, 8x)
+      mid: "equal"         # Abstract Processing (8x)
+      up_0_1: "equal"      # Reconstruction (8x, 16x)
+      up_2_3: "equal"      # Final Style & Textures (32x, 64x)
+
 
 # =====================================
 # APPLICATION SETTINGS
@@ -85,4 +103,4 @@ app:
 
   # Application version - recorded in metadata for merge reproducibility
   # Format: "major.minor" (e.g., "1.0", "1.1", "2.0")
-  version: "1.0"
+  version: "1.1"

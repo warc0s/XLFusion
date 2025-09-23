@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-XLFusion V1.0
+XLFusion V1.1
 
-Interactive SDXL checkpoint merger with two fusion modes:
+Interactive SDXL checkpoint merger with three fusion modes:
 - Legacy: Classic weighted merge with down/mid/up blocks
-- PerRes: Resolution-based block control (new)
+- PerRes: Resolution-based block control
+- Hybrid: Combined weighted + resolution control (V1.1)
 
 PerRes (per-resolution) mode:
 - 100% assignment by block pairs based on resolution
@@ -61,9 +62,24 @@ def load_config() -> dict:
                 "output": "output",
                 "metadata": "metadata"
             },
+            "merge_defaults": {
+                "legacy": {
+                    "cross_attention_boost": 1.0,
+                    "down_blocks_multiplier": 1.0,
+                    "mid_blocks_multiplier": 1.0,
+                    "up_blocks_multiplier": 1.0
+                },
+                "perres": {
+                    "cross_attention_locks": False
+                },
+                "hybrid": {
+                    "cross_attention_boost": 1.0,
+                    "cross_attention_locks": False
+                }
+            },
             "app": {
                 "tool_name": "XLFusion",
-                "version": "1.0"
+                "version": "1.1"
             }
         }
 
@@ -287,6 +303,183 @@ def merge_perres(
     gc.collect()
 
     return merged
+
+
+# ---------------- Hybrid Mode (V1.1) ----------------
+
+def merge_hybrid(
+    model_paths: List[Path],
+    weights: List[float],
+    block_weights: Dict[str, List[float]],  # {"down_0_1": [0.7, 0.3], "down_2_3": [0.5, 0.5], ...}
+    backbone_idx: int,
+    cross_attention_boost: float = 1.0,
+    attn2_locks: Optional[Dict[str, int]] = None
+) -> Dict[str, torch.Tensor]:
+    """
+    Hybrid mode fusion: Combines weighted merging (Legacy) with resolution-based control (PerRes).
+    Applies different weights to different resolution blocks for maximum flexibility.
+    """
+    print("\nStarting Hybrid fusion...")
+
+    # Load all models
+    states = {}
+    model_names = [p.name for p in model_paths]
+
+    for i, path in enumerate(model_paths):
+        print(f"Loading model {i} ({path.name})...")
+        states[i] = load_state(path)
+
+    # Start with backbone for complete structure
+    merged = {}
+    backbone_state = states[backbone_idx]
+
+    # Statistics
+    stats = {
+        "down_0_1": 0, "down_2_3": 0, "mid": 0,
+        "up_0_1": 0, "up_2_3": 0, "other": 0,
+        "attn2_locks": 0, "cross_attn_boost": 0
+    }
+
+    for key in backbone_state.keys():
+        # For non-UNet keys, use backbone
+        if not key.startswith(UNET_PREFIX):
+            merged[key] = backbone_state[key]
+            continue
+
+        # Check if it's a cross-attention key with lock
+        if attn2_locks and is_cross_attn_key(key):
+            block_type = get_attn2_block_type(key)
+            if block_type and block_type in attn2_locks:
+                lock_idx = attn2_locks[block_type]
+                if key in states[lock_idx]:
+                    merged[key] = states[lock_idx][key]
+                    stats["attn2_locks"] += 1
+                    continue
+
+        # Get block assignment for this key
+        block_group = get_block_assignment(key)
+
+        if block_group and block_group in block_weights:
+            # Apply hybrid weighted merge for this block group
+            block_weight_list = block_weights[block_group]
+
+            # Ensure we have tensors from all models for this key
+            tensors = []
+            used_weights = []
+            for i, weight in enumerate(block_weight_list):
+                if weight > 0 and key in states[i]:
+                    tensors.append(states[i][key])
+                    used_weights.append(weight)
+
+            if tensors:
+                # Normalize weights
+                total_weight = sum(used_weights)
+                if total_weight > 0:
+                    normalized_weights = [w / total_weight for w in used_weights]
+
+                    # Weighted sum
+                    result = tensors[0] * normalized_weights[0]
+                    for j in range(1, len(tensors)):
+                        result += tensors[j] * normalized_weights[j]
+
+                    # Apply cross-attention boost if applicable
+                    if cross_attention_boost != 1.0 and is_cross_attn_key_legacy(key):
+                        result *= cross_attention_boost
+                        stats["cross_attn_boost"] += 1
+
+                    merged[key] = result
+                    stats[block_group] = stats.get(block_group, 0) + 1
+                else:
+                    # Fallback to backbone
+                    merged[key] = backbone_state[key]
+            else:
+                # Fallback to backbone
+                merged[key] = backbone_state[key]
+        else:
+            # Other UNet components, use backbone
+            merged[key] = backbone_state[key]
+            if block_group:
+                stats["other"] += 1
+
+    # Report statistics
+    print("\nHybrid fusion completed:")
+    print(f"  Down 0,1: {stats['down_0_1']} keys")
+    print(f"  Down 2,3: {stats['down_2_3']} keys")
+    print(f"  Mid:      {stats['mid']} keys")
+    print(f"  Up 0,1:   {stats['up_0_1']} keys")
+    print(f"  Up 2,3:   {stats['up_2_3']} keys")
+    print(f"  Other:    {stats['other']} keys")
+    if attn2_locks:
+        print(f"  Attn2 locks: {stats['attn2_locks']} keys")
+    if cross_attention_boost != 1.0:
+        print(f"  Cross-attn boost: {stats['cross_attn_boost']} keys")
+
+    # Free memory
+    del states
+    gc.collect()
+
+    return merged
+
+
+def prompt_hybrid_weights(model_names: List[str]) -> Dict[str, List[float]]:
+    """
+    Prompt user for hybrid mode weights per resolution block.
+    """
+    print("\n" + "="*60)
+    print("HYBRID MODE CONFIGURATION")
+    print("="*60)
+    print("Configure weights for each resolution block group.")
+    print("Each block can have different weight distributions.")
+    print("Sum of weights per block will be normalized to 1.0.")
+
+    block_groups = ["down_0_1", "down_2_3", "mid", "up_0_1", "up_2_3"]
+    block_descriptions = {
+        "down_0_1": "Down 0,1 (64x, 32x) - Composition & Structure",
+        "down_2_3": "Down 2,3 (16x, 8x) - Semantic Details",
+        "mid": "Mid (8x) - Abstract Processing",
+        "up_0_1": "Up 0,1 (8x, 16x) - Reconstruction",
+        "up_2_3": "Up 2,3 (32x, 64x) - Final Style & Textures"
+    }
+
+    block_weights = {}
+
+    # Default weights: equal distribution
+    default_weight = 1.0 / len(model_names)
+
+    for block in block_groups:
+        print(f"\n{block_descriptions[block]}:")
+        print("Models:")
+        for i, name in enumerate(model_names):
+            print(f"  [{i}] {name}")
+
+        # Prompt for weights
+        weights_str = input(f"Weights for {block} [{', '.join([f'{default_weight:.2f}'] * len(model_names))}]: ").strip()
+
+        if not weights_str:
+            # Use default equal weights
+            weights = [default_weight] * len(model_names)
+        else:
+            try:
+                weights = [float(x.strip()) for x in weights_str.split(",")]
+                if len(weights) != len(model_names):
+                    print(f"Warning: Expected {len(model_names)} weights, got {len(weights)}. Using defaults.")
+                    weights = [default_weight] * len(model_names)
+            except ValueError:
+                print("Invalid input. Using default weights.")
+                weights = [default_weight] * len(model_names)
+
+        # Normalize weights
+        total = sum(weights)
+        if total > 0:
+            weights = [w / total for w in weights]
+        else:
+            weights = [default_weight] * len(model_names)
+
+        block_weights[block] = weights
+
+        print(f"Normalized weights: {[f'{w:.3f}' for w in weights]}")
+
+    return block_weights
 
 
 # ---------------- Legacy Merge (original mode) ----------------
@@ -850,7 +1043,7 @@ def main() -> int:
     models_dir, loras_dir, output_dir, metadata_dir = ensure_dirs(root)
 
     print("\n" + "="*60)
-    print(" XLFusion V1.0 - Advanced SDXL checkpoint merger")
+    print(" XLFusion V1.1 - Advanced SDXL checkpoint merger")
     print("="*60)
     print(f"\nDetected structure:")
     print(f"  models:   {models_dir}")
@@ -869,12 +1062,19 @@ def main() -> int:
     print("FUSION MODE")
     print("="*60)
     print("[1] Legacy - Classic weighted merge (3 blocks + LoRAs)")
-    print("[2] PerRes - Resolution-based control (new, no LoRAs)")
-    print("\n    PerRes assigns complete blocks by resolution")
-    print("    allowing precise control of style and adherence")
+    print("[2] PerRes - Resolution-based control (no LoRAs)")
+    print("[3] Hybrid - Combined weighting + resolution control (NEW)")
+    print("\n    Legacy: Traditional weighted blending")
+    print("    PerRes: Complete block assignment by resolution")
+    print("    Hybrid: Best of both - weights applied per resolution")
 
     mode_raw = input("\nSelect mode [1]: ").strip()
-    mode = "perres" if mode_raw == "2" else "legacy"
+    if mode_raw == "2":
+        mode = "perres"
+    elif mode_raw == "3":
+        mode = "hybrid"
+    else:
+        mode = "legacy"
 
     if mode == "perres":
         # PERRES MODE
@@ -974,6 +1174,130 @@ def main() -> int:
             print(f"Metadata log: {meta_txt.name}")
 
             print("\nPerRes fusion completed successfully")
+            print("Validate with different seeds and prompts to verify consistency")
+            return 0
+
+    # HYBRID MODE
+    elif mode == "hybrid":
+        print("\n" + "="*60)
+        print("HYBRID MODE ACTIVATED")
+        print("="*60)
+        print("Combines weighted blending with resolution-based control")
+        print("Configure different weights for each resolution block")
+
+        # Model selection
+        print("\nAvailable checkpoints:")
+        for i, p in enumerate(model_files):
+            size_mb = p.stat().st_size / (1024 * 1024)
+            print(f"  [{i}] {p.name}  ({size_mb:.1f} MB)")
+
+        print("\nRecommendation: use 2-4 models with complementary strengths")
+        default_model_idx = list(range(min(3, len(model_files))))
+        selected_idx = prompt_select(model_files, "Select models to merge:", default_model_idx)
+
+        if len(selected_idx) < 2:
+            print("\nHybrid mode requires at least 2 models. Switching to Legacy mode...")
+            mode = "legacy"
+        else:
+            selected_models = [model_files[i] for i in selected_idx]
+            model_names = [p.name for p in selected_models]
+
+            # Configure hybrid weights per resolution block
+            block_weights = prompt_hybrid_weights(model_names)
+
+            # Backbone selection
+            backbone_idx = pick_backbone(model_names)
+
+            # Cross-attention boost
+            try:
+                config = load_config()
+                default_boost = config["merge_defaults"]["hybrid"]["cross_attention_boost"]
+            except (KeyError, TypeError):
+                default_boost = 1.0  # Fallback if hybrid config missing
+            boost_str = input(f"\nCross-attention boost [{default_boost}]: ").strip()
+            cross_attention_boost = float(boost_str) if boost_str else default_boost
+
+            # Optional cross-attention locks
+            use_locks = input("\nUse cross-attention locks? [n]: ").strip().lower() in ['y', 'yes']
+            attn2_locks = None
+            if use_locks:
+                print("\nCross-attention locks (override block weights for attn2 layers):")
+                locks = {}
+                for block_type in ["down", "mid", "up"]:
+                    idx_str = input(f"  {block_type.capitalize()} attn2 model [0]: ").strip()
+                    locks[block_type] = int(idx_str) if idx_str.isdigit() else 0
+                attn2_locks = locks
+
+            # Execute hybrid merge
+            print(f"\nExecuting hybrid merge...")
+            merged = merge_hybrid(
+                selected_models,
+                [1.0] * len(selected_models),  # Not used in hybrid, but kept for compatibility
+                block_weights,
+                backbone_idx,
+                cross_attention_boost,
+                attn2_locks
+            )
+
+            # Prepare metadata
+            out_path, version = next_version_path(output_dir)
+
+            app_cfg = config["app"]
+            output_cfg = config["model_output"]
+
+            meta_embed = {
+                "title": f"{output_cfg['base_name']}_{output_cfg['version_prefix']}{version}",
+                "format": "sdxl-a1111-like",
+                "merge_mode": "hybrid",
+                "backbone": model_names[backbone_idx],
+                "models": json.dumps(model_names, ensure_ascii=False),
+                "block_weights": json.dumps(block_weights, ensure_ascii=False),
+                "cross_attention_boost": str(cross_attention_boost),
+                "attn2_locks": json.dumps(attn2_locks, ensure_ascii=False) if attn2_locks else "",
+                "created": datetime.now().isoformat(timespec='seconds'),
+                "tool": "XLFusion",
+            }
+
+            # Save
+            print(f"\nSaving model to {out_path.name}...")
+            save_state(out_path, merged, meta_embed)
+
+            # Audit log
+            meta_txt = metadata_dir / f"meta_{output_cfg['base_name']}_{output_cfg['version_prefix']}{version}.txt"
+            lines = [
+                f"{app_cfg['tool_name']} V{app_cfg['version']} - Hybrid Mode",
+                f"Date: {datetime.now().isoformat(timespec='seconds')}",
+                f"Output: {out_path.name}",
+                "",
+                "Base models:",
+            ]
+            for i, name in enumerate(model_names):
+                lines.append(f"  [{i}] {name}")
+            lines.append("")
+            lines.append(f"Backbone (CLIP/VAE): {model_names[backbone_idx]}")
+            lines.append("")
+            lines.append("Block weights:")
+            for block, weights in block_weights.items():
+                lines.append(f"  {block}: {[f'{w:.3f}' for w in weights]}")
+
+            if cross_attention_boost != 1.0:
+                lines.append(f"\nCross-attention boost: {cross_attention_boost}")
+
+            if attn2_locks:
+                lines.append("")
+                lines.append("Cross-attention locks (attn2):")
+                lines.append(f"  Down: {model_names[attn2_locks['down']]}")
+                lines.append(f"  Mid:  {model_names[attn2_locks['mid']]}")
+                lines.append(f"  Up:   {model_names[attn2_locks['up']]}")
+
+            lines.append("")
+            lines.append(f"Total keys: {len(merged)}")
+            lines.append(f"UNet keys: {len([k for k in merged.keys() if k.startswith(UNET_PREFIX)])}")
+
+            meta_txt.write_text("\n".join(lines), encoding="utf-8")
+            print(f"Metadata log: {meta_txt.name}")
+
+            print("\nHybrid fusion completed successfully")
             print("Validate with different seeds and prompts to verify consistency")
             return 0
 

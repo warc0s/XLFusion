@@ -5,7 +5,19 @@
 
 ## Versiones Actuales
 
-### V1.0 (Actual)
+### V1.1 (Actual) ✅
+- **Modo Híbrido**: Combina fusión ponderada con asignación por resolución
+- **Control granular**: Pesos diferentes para cada bloque de resolución
+- **Compatibilidad total**: Mantiene soporte para Legacy y PerRes
+- **UI mejorada**: Interfaz intuitiva para configurar el modo híbrido
+- Modo Legacy: Fusión ponderada con control por bloques
+- Modo PerRes: Asignación por resolución con control preciso
+- Sistema de configuración YAML centralizado
+- Soporte para LoRAs (modo Legacy)
+- Versionado automático
+- Metadatos y logs de auditoría
+
+### V1.0 (Completado)
 - Modo Legacy: Fusión ponderada con control por bloques
 - Modo PerRes: Asignación por resolución con control preciso
 - Sistema de configuración YAML centralizado
@@ -15,19 +27,21 @@
 
 ## Roadmap Futuro
 
-### V1.1 - Modo Híbrido
-**Objetivo**: Fusionar las capacidades de Legacy y PerRes en un solo modo unificado
+### ~~V1.1 - Modo Híbrido~~ ✅ COMPLETADO
+**Estado**: ✅ **IMPLEMENTADO Y DESPLEGADO**
 
-**Características planeadas:**
-- **Modo Híbrido**: Combinar ponderación (Legacy) con asignación por resolución (PerRes)
-- **Control granular**: Aplicar diferentes pesos a diferentes bloques de resolución
-- **Compatibilidad total**: Mantener soporte para configuraciones Legacy y PerRes existentes
-- **UI mejorada**: Interfaz más intuitiva para configurar el modo híbrido
+**Características implementadas:**
+- ✅ **Modo Híbrido**: Combina ponderación (Legacy) con asignación por resolución (PerRes)
+- ✅ **Control granular**: Aplicar diferentes pesos a diferentes bloques de resolución
+- ✅ **Compatibilidad total**: Mantiene soporte para configuraciones Legacy y PerRes existentes
+- ✅ **UI mejorada**: Interfaz intuitiva para configurar el modo híbrido con prompts descriptivos
 
-**Beneficios:**
-- Máxima flexibilidad en la fusión de modelos
-- Mejor control sobre aspectos específicos (composición, detalles, estilo)
-- Aprovecha lo mejor de ambos modos actuales
+**Beneficios logrados:**
+- ✅ Máxima flexibilidad en la fusión de modelos
+- ✅ Mejor control sobre aspectos específicos (composición, detalles, estilo)
+- ✅ Aprovecha lo mejor de ambos modos actuales
+- ✅ Sistema de configuración robusto con fallbacks
+- ✅ Metadatos completos para reproducibilidad
 
 ---
 
@@ -107,7 +121,7 @@ batch_jobs:
 ## Prioridades de Desarrollo
 
 ### Alta Prioridad
-1. **V1.1 - Modo Híbrido**: Máximo impacto, complejidad media
+1. ~~**V1.1 - Modo Híbrido**~~: ✅ **COMPLETADO** - Máximo impacto logrado
 2. **V1.2 - Fusión por Lotes**: Alta demanda de automatización
 
 ### Media Prioridad
@@ -142,4 +156,4 @@ Abre un issue en el repositorio o contáctame a través de [LinkedIn](https://ww
 
 ---
 
-*Última actualización: Septiembre 2025*
+*Última actualización: Septiembre 2025 - V1.1 Híbrido Completado*

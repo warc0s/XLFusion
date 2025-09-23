@@ -160,6 +160,7 @@ cython_debug/
 
 # Claude Code specific
 .claude/
+CLAUDE.md
 
 # Model files and outputs (large binary files)
 models/*.safetensors
