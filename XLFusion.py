@@ -33,18 +33,26 @@ from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 
 import torch
-import yaml
 from safetensors.torch import load_file as st_load, save_file as st_save
+
+# Try to import yaml with graceful fallback
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    YAML_AVAILABLE = False
 
 # Import merge modules and common utilities
 from code_utils.common import load_state, save_state
 from code_utils.legacy_merge import (
     stream_weighted_merge_from_paths,
+    stream_weighted_merge_memory_efficient,
     apply_single_lora
 )
 from code_utils.perres_merge import merge_perres, prompt_perres_assignments
 from code_utils.hybrid_merge import (
     merge_hybrid,
+    merge_hybrid_memory_efficient,
     prompt_hybrid_weights
 )
 
@@ -53,47 +61,100 @@ UNET_PREFIX = "model.diffusion_model."
 
 # Configuration loader
 def load_config() -> dict:
-    """Load configuration from config.yaml"""
-    try:
-        with open("config.yaml", "r") as f:
-            return yaml.safe_load(f)
-    except FileNotFoundError:
-        # Fallback configuration if config.yaml doesn't exist
-        return {
-            "model_output": {
-                "base_name": "XLFusion",
-                "version_prefix": "V",
-                "file_extension": ".safetensors",
-                "output_dir": "output",
-                "metadata_dir": "metadata",
-                "auto_version": True
+    """
+    Load configuration from config.yaml with robust error handling.
+
+    Returns default configuration if:
+    - PyYAML is not installed
+    - config.yaml doesn't exist
+    - config.yaml is corrupted/invalid
+
+    Always succeeds and emits clear warnings for issues.
+    """
+    default_config = {
+        "model_output": {
+            "base_name": "XLFusion",
+            "version_prefix": "V",
+            "file_extension": ".safetensors",
+            "output_dir": "output",
+            "metadata_dir": "metadata",
+            "auto_version": True
+        },
+        "directories": {
+            "models": "models",
+            "loras": "loras",
+            "output": "output",
+            "metadata": "metadata"
+        },
+        "merge_defaults": {
+            "legacy": {
+                "cross_attention_boost": 1.0,
+                "down_blocks_multiplier": 1.0,
+                "mid_blocks_multiplier": 1.0,
+                "up_blocks_multiplier": 1.0
             },
-            "directories": {
-                "models": "models",
-                "loras": "loras",
-                "output": "output",
-                "metadata": "metadata"
+            "perres": {
+                "cross_attention_locks": False
             },
-            "merge_defaults": {
-                "legacy": {
-                    "cross_attention_boost": 1.0,
-                    "down_blocks_multiplier": 1.0,
-                    "mid_blocks_multiplier": 1.0,
-                    "up_blocks_multiplier": 1.0
-                },
-                "perres": {
-                    "cross_attention_locks": False
-                },
-                "hybrid": {
-                    "cross_attention_boost": 1.0,
-                    "cross_attention_locks": False
-                }
-            },
-            "app": {
-                "tool_name": "XLFusion",
-                "version": "1.1"
+            "hybrid": {
+                "cross_attention_boost": 1.0,
+                "cross_attention_locks": False
             }
+        },
+        "app": {
+            "tool_name": "XLFusion",
+            "version": "1.1"
         }
+    }
+
+    # Check if PyYAML is available
+    if not YAML_AVAILABLE:
+        print("Warning: PyYAML not installed. Using default configuration.")
+        print("  Install with: pip install PyYAML>=6.0")
+        return default_config
+
+    # Try to load config.yaml
+    try:
+        with open("config.yaml", "r", encoding="utf-8") as f:
+            config_data = yaml.safe_load(f)
+
+        # Validate that we got a dict
+        if not isinstance(config_data, dict):
+            print("Warning: config.yaml does not contain a valid configuration object.")
+            print("  Using default configuration instead.")
+            return default_config
+
+        # Merge loaded config with defaults (defaults take precedence for missing keys)
+        def merge_configs(default: dict, loaded: dict) -> dict:
+            """Recursively merge configurations, keeping defaults for missing keys."""
+            result = default.copy()
+            if isinstance(loaded, dict):
+                for key, value in loaded.items():
+                    if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                        result[key] = merge_configs(result[key], value)
+                    else:
+                        result[key] = value
+            return result
+
+        merged_config = merge_configs(default_config, config_data)
+        print("Configuration loaded successfully from config.yaml")
+        return merged_config
+
+    except FileNotFoundError:
+        print("Info: config.yaml not found. Using default configuration.")
+        return default_config
+    except yaml.YAMLError as e:
+        print(f"Warning: config.yaml contains invalid YAML syntax: {e}")
+        print("  Using default configuration instead.")
+        return default_config
+    except (IOError, OSError) as e:
+        print(f"Warning: Could not read config.yaml: {e}")
+        print("  Using default configuration instead.")
+        return default_config
+    except Exception as e:
+        print(f"Warning: Unexpected error loading config.yaml: {e}")
+        print("  Using default configuration instead.")
+        return default_config
 
 # ---------------- I/O Utilities ----------------
 
@@ -389,6 +450,14 @@ def main() -> int:
     else:
         mode = "legacy"
 
+    # Memory-efficient option for Legacy and Hybrid modes
+    use_memory_efficient = False
+    if mode in ["legacy", "hybrid"]:
+        mem_choice = input("\nUse memory-efficient loading? Reduces RAM spikes for large models [y/n]: ").strip().lower()
+        use_memory_efficient = mem_choice in ['y', 'yes', '1']
+        if use_memory_efficient:
+            print("Memory-efficient mode enabled - tensors will be loaded one at a time")
+
     if mode == "perres":
         # PERRES MODE
         print("\n" + "="*60)
@@ -566,15 +635,25 @@ def main() -> int:
                 attn2_locks = locks
 
             # Execute hybrid merge
-            print(f"\nExecuting hybrid merge...")
-            merged = merge_hybrid(
-                selected_models,
-                [1.0] * len(selected_models),  # Not used in hybrid, but kept for compatibility
-                block_weights,
-                backbone_idx,
-                cross_attention_boost,
-                attn2_locks
-            )
+            if use_memory_efficient:
+                print(f"\nExecuting memory-efficient hybrid merge...")
+                merged = merge_hybrid_memory_efficient(
+                    selected_models,
+                    block_weights,
+                    backbone_idx,
+                    cross_attention_boost,
+                    attn2_locks
+                )
+            else:
+                print(f"\nExecuting hybrid merge...")
+                merged = merge_hybrid(
+                    selected_models,
+                    [1.0] * len(selected_models),  # Not used in hybrid, but kept for compatibility
+                    block_weights,
+                    backbone_idx,
+                    cross_attention_boost,
+                    attn2_locks
+                )
 
             # Prepare metadata
             out_path, version = next_version_path(output_dir)
@@ -582,10 +661,12 @@ def main() -> int:
             app_cfg = config["app"]
             output_cfg = config["model_output"]
 
+            hybrid_mode = "hybrid_memory_efficient" if use_memory_efficient else "hybrid"
             meta_embed = {
                 "title": f"{output_cfg['base_name']}_{output_cfg['version_prefix']}{version}",
                 "format": "sdxl-a1111-like",
-                "merge_mode": "hybrid",
+                "merge_mode": hybrid_mode,
+                "memory_efficient": str(use_memory_efficient).lower(),
                 "backbone": model_names[backbone_idx],
                 "models": json.dumps(model_names, ensure_ascii=False),
                 "block_weights": json.dumps(block_weights, ensure_ascii=False),
@@ -601,8 +682,9 @@ def main() -> int:
 
             # Audit log
             meta_txt = metadata_dir / f"meta_{output_cfg['base_name']}_{output_cfg['version_prefix']}{version}.txt"
+            mode_desc = "Hybrid Mode (Memory-Efficient)" if use_memory_efficient else "Hybrid Mode"
             lines = [
-                f"{app_cfg['tool_name']} V{app_cfg['version']} - Hybrid Mode",
+                f"{app_cfg['tool_name']} V{app_cfg['version']} - {mode_desc}",
                 f"Date: {datetime.now().isoformat(timespec='seconds')}",
                 f"Output: {out_path.name}",
                 "",
@@ -672,13 +754,22 @@ def main() -> int:
         # Cross-attention boost
         crossattn_boosts = prompt_crossattn_boost(model_names)
 
-        print("\nFusion with memory containment...")
-        merged, backbone_state = stream_weighted_merge_from_paths(
-            selected_models, weights, backbone_idx,
-            only_unet=True,
-            block_multipliers=block_multipliers,
-            crossattn_boosts=crossattn_boosts,
-        )
+        if use_memory_efficient:
+            print("\nMemory-efficient fusion...")
+            merged, backbone_state = stream_weighted_merge_memory_efficient(
+                selected_models, weights, backbone_idx,
+                only_unet=True,
+                block_multipliers=block_multipliers,
+                crossattn_boosts=crossattn_boosts,
+            )
+        else:
+            print("\nFusion with memory containment...")
+            merged, backbone_state = stream_weighted_merge_from_paths(
+                selected_models, weights, backbone_idx,
+                only_unet=True,
+                block_multipliers=block_multipliers,
+                crossattn_boosts=crossattn_boosts,
+            )
 
         # LoRAs
         lora_files = list_safetensors(loras_dir)
@@ -699,10 +790,12 @@ def main() -> int:
         app_cfg = config["app"]
         output_cfg = config["model_output"]
 
+        unet_merge_method = "weighted_blocked_crossboost_memory_efficient" if use_memory_efficient else "weighted_blocked_crossboost_stream"
         meta_embed = {
             "title": f"{output_cfg['base_name']}_{output_cfg['version_prefix']}{version}",
             "format": "sdxl-a1111-like",
-            "unet_merge": "weighted_blocked_crossboost_stream",
+            "unet_merge": unet_merge_method,
+            "memory_efficient": str(use_memory_efficient).lower(),
             "backbone": model_names[backbone_idx],
             "bases": json.dumps([{ "file": n, "weight": float(w) } for n, w in zip(model_names, weights)], ensure_ascii=False),
             "block_multipliers": json.dumps(block_multipliers, ensure_ascii=False) if block_multipliers else "",
@@ -717,8 +810,9 @@ def main() -> int:
 
         # Audit log
         meta_txt = metadata_dir / f"meta_{output_cfg['base_name']}_{output_cfg['version_prefix']}{version}.txt"
+        legacy_mode_desc = "Legacy Mode (Memory-Efficient)" if use_memory_efficient else "Legacy Mode"
         lines = [
-            f"{app_cfg['tool_name']} V{app_cfg['version']} - Legacy Mode",
+            f"{app_cfg['tool_name']} V{app_cfg['version']} - {legacy_mode_desc}",
             f"Date: {datetime.now().isoformat(timespec='seconds')}",
             f"Output: {out_path.name}",
             "",

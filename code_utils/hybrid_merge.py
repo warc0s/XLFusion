@@ -16,6 +16,7 @@ from .common import (
     get_attn2_block_type,
     is_cross_attn_key_legacy
 )
+from .progress import MergeProgressTracker, create_tensor_progress
 
 
 # Common functions imported from .common module
@@ -33,21 +34,23 @@ def merge_hybrid(
     Hybrid mode fusion: Combines weighted merging (Legacy) with resolution-based control (PerRes).
     Applies different weights to different resolution blocks for maximum flexibility.
     """
-    print("\nStarting Hybrid fusion...")
+    # Initialize progress tracker
+    tracker = MergeProgressTracker(model_paths, "Hybrid")
 
     # Validate backbone index
     if backbone_idx < 0 or backbone_idx >= len(model_paths):
         print(f"Error: Backbone index {backbone_idx} is out of range (0-{len(model_paths)-1})")
         return {}
 
-    # Load all models
+    # Phase 1: Load all models
     states = {}
     model_names = [p.name for p in model_paths]
+    progress_bar = tracker.start_phase("Loading models", len(model_paths))
 
     for i, path in enumerate(model_paths):
-        print(f"Loading model {i} ({path.name})...")
         try:
             states[i] = load_state(path)
+            progress_bar.update()
         except Exception as e:
             print(f"Error loading model {i}: {e}")
             print("Consider using fewer models or freeing memory.")
@@ -57,7 +60,9 @@ def merge_hybrid(
             gc.collect()
             raise
 
-    # Start with backbone for complete structure
+    tracker.finish_phase(progress_bar)
+
+    # Phase 2: Process tensors
     merged = {}
     backbone_state = states[backbone_idx]
 
@@ -68,10 +73,13 @@ def merge_hybrid(
         "attn2_locks": 0, "cross_attn_boost": 0
     }
 
+    progress_bar = tracker.start_phase("Processing tensors", len(backbone_state.keys()))
+
     for key in backbone_state.keys():
         # For non-UNet keys, use backbone
         if not key.startswith(UNET_PREFIX):
             merged[key] = backbone_state[key]
+            progress_bar.update()
             continue
 
         # Check if it's a cross-attention key with lock
@@ -82,6 +90,7 @@ def merge_hybrid(
                 if key in states[lock_idx]:
                     merged[key] = states[lock_idx][key]
                     stats["attn2_locks"] += 1
+                    progress_bar.update()
                     continue
 
         # Get block assignment for this key
@@ -96,6 +105,7 @@ def merge_hybrid(
                 print(f"Warning: Block weights for {block_group} has {len(block_weight_list)} entries but {len(model_paths)} models provided")
                 # Fallback to backbone
                 merged[key] = backbone_state[key]
+                progress_bar.update()
                 continue
 
             # Ensure we have tensors from all models for this key
@@ -136,6 +146,10 @@ def merge_hybrid(
             if block_group:
                 stats["other"] += 1
 
+        progress_bar.update()
+
+    tracker.finish_phase(progress_bar)
+
     # Report statistics
     print("\nHybrid fusion completed:")
     print(f"  Down 0,1: {stats['down_0_1']} keys")
@@ -153,7 +167,37 @@ def merge_hybrid(
     del states
     gc.collect()
 
+    tracker.finish()
     return merged
+
+
+def merge_hybrid_memory_efficient(
+    model_paths: List[Path],
+    block_weights: Dict[str, List[float]],
+    backbone_idx: int,
+    cross_attention_boost: float = 1.0,
+    attn2_locks: Optional[Dict[str, int]] = None
+) -> Dict[str, torch.Tensor]:
+    """
+    Memory-efficient hybrid fusion that loads tensors one at a time.
+    Reduces RAM spikes by avoiding full model loading.
+    """
+    from .memory_efficient import memory_efficient_hybrid_merge
+
+    print("\nStarting memory-efficient Hybrid fusion...")
+
+    # Validate backbone index
+    if backbone_idx < 0 or backbone_idx >= len(model_paths):
+        print(f"Error: Backbone index {backbone_idx} is out of range (0-{len(model_paths)-1})")
+        return {}
+
+    # Use the memory-efficient implementation
+    return memory_efficient_hybrid_merge(
+        model_paths=model_paths,
+        block_weights=block_weights,
+        backbone_idx=backbone_idx,
+        cross_attention_boost=cross_attention_boost
+    )
 
 
 def prompt_hybrid_weights(model_names: List[str]) -> Dict[str, List[float]]:

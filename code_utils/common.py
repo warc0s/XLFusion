@@ -24,6 +24,23 @@ def load_state(path: Path) -> Dict[str, torch.Tensor]:
     return out
 
 
+def load_state_memory_efficient(path: Path, preserve_dtype: bool = False) -> Dict[str, torch.Tensor]:
+    """
+    Memory-efficient state loading with optional dtype preservation.
+    For large models, consider using MemoryEfficientLoader directly.
+    """
+    from .memory_efficient import MemoryEfficientLoader
+
+    state = {}
+    with MemoryEfficientLoader(path) as loader:
+        for key in loader.keys():
+            tensor = loader.get_tensor(key, preserve_dtype=preserve_dtype)
+            if not preserve_dtype and tensor.dtype in (torch.float16, torch.bfloat16):
+                tensor = tensor.to(torch.float32)
+            state[key] = tensor
+    return state
+
+
 def get_block_assignment(key: str) -> Optional[str]:
     """
     Determines which block group a key belongs to.
@@ -101,10 +118,30 @@ def is_cross_attn_key_legacy(k: str) -> bool:
 
 def save_state(path: Path, state: Dict[str, torch.Tensor], meta: Dict[str, str]) -> None:
     """Save model state to safetensors file with metadata."""
+    # Import here to avoid circular import
+    from .progress_simple import track_tensor_progress, show_phase_start, show_phase_complete
+
+    # Convert tensors to FP16 for storage efficiency
+    convert_start = show_phase_start(f"Preparing {len(state)} tensors for save")
+    progress_bar = track_tensor_progress(len(state), "Converting to FP16")
+
     compact: Dict[str, torch.Tensor] = {}
     for k, v in state.items():
         if v.dtype == torch.float32 and v.dim() >= 2:
             compact[k] = v.to(torch.float16)
         else:
             compact[k] = v
+        if progress_bar:
+            progress_bar.update()
+
+    if progress_bar:
+        progress_bar.finish()
+    show_phase_complete("Tensor conversion", convert_start)
+
+    # Write to disk
+    print(f"Writing to {path.name}...")
     st_save(compact, str(path), metadata=meta)
+
+    # Show final size
+    file_size_mb = path.stat().st_size / (1024 * 1024)
+    print(f"Saved {len(compact)} tensors ({file_size_mb:.1f} MB)")

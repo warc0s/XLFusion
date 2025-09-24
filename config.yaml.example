@@ -1,0 +1,36 @@
+# XLFusion Configuration Example
+# Copy this to config.yaml and customize as needed
+# All settings are optional - defaults will be used for missing values
+
+app:
+  tool_name: "XLFusion"
+  version: "1.1"
+
+# Directory structure
+directories:
+  models: "models"      # Input checkpoint models
+  loras: "loras"        # LoRA files (legacy mode only)
+  output: "output"      # Merged model outputs
+  metadata: "metadata"  # Audit logs
+
+# Output file naming
+model_output:
+  base_name: "XLFusion"
+  version_prefix: "V"
+  file_extension: ".safetensors"
+  auto_version: true
+
+# Default merge parameters
+merge_defaults:
+  legacy:
+    cross_attention_boost: 1.0
+    down_blocks_multiplier: 1.0
+    mid_blocks_multiplier: 1.0
+    up_blocks_multiplier: 1.0
+
+  perres:
+    cross_attention_locks: false
+
+  hybrid:
+    cross_attention_boost: 1.0
+    cross_attention_locks: false
