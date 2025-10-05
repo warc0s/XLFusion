@@ -1,0 +1,66 @@
+# Smoke test batch configuration using tiny synthetic models
+version: "1.3"
+
+global_settings:
+  output_base: "test_output"
+  continue_on_error: true
+  max_parallel: 1
+  log_level: "INFO"
+
+batch_jobs:
+  # Legacy with 2 models, with multipliers and boosts
+  - name: "test_legacy_2"
+    mode: "legacy"
+    description: "Legacy merge 2 models with multipliers and boosts"
+    models: ["test_model_a.safetensors", "test_model_b.safetensors"]
+    weights: [0.6, 0.4]
+    backbone: 0
+    block_multipliers:
+      - {down: 1.0, mid: 1.0, up: 1.0}
+      - {down: 1.1, mid: 0.9, up: 1.0}
+    crossattn_boosts:
+      - {down: 1.0, mid: 1.0, up: 1.0}
+      - {down: 1.0, mid: 1.2, up: 1.0}
+
+  # Legacy with 3 models
+  - name: "test_legacy_3"
+    mode: "legacy"
+    description: "Legacy merge 3 models"
+    models: ["test_model_a.safetensors", "test_model_b.safetensors", "test_model_c.safetensors"]
+    weights: [0.5, 0.3, 0.2]
+    backbone: 0
+
+  # PerRes
+  - name: "test_perres"
+    mode: "perres"
+    description: "PerRes merge with assignments and locks"
+    models: ["test_model_a.safetensors", "test_model_b.safetensors"]
+    backbone: 0
+    assignments:
+      down_0_1: 0
+      down_2_3: 0
+      mid: 1
+      up_0_1: 1
+      up_2_3: 1
+    attn2_locks:
+      down: 0
+      mid: 1
+      up: 1
+
+  # Hybrid
+  - name: "test_hybrid"
+    mode: "hybrid"
+    description: "Hybrid merge with per-block weights and locks"
+    models: ["test_model_a.safetensors", "test_model_b.safetensors"]
+    backbone: 0
+    hybrid_config:
+      down_0_1: {0: 0.8, 1: 0.2}
+      down_2_3: {0: 0.7, 1: 0.3}
+      mid: {0: 0.5, 1: 0.5}
+      up_0_1: {0: 0.3, 1: 0.7}
+      up_2_3: {0: 0.2, 1: 0.8}
+    attn2_locks:
+      down: 0
+      mid: 0
+      up: 1
+

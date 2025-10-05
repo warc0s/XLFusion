@@ -1,0 +1,210 @@
+# XLFusion V1.2 - Batch Configuration Example
+# ============================================
+# This file demonstrates how to configure multiple model fusions in batch mode
+# Run with: python XLFusion.py --batch batch_config_example.yaml
+
+version: "1.2"
+
+# Global settings applied to all batch jobs
+global_settings:
+  # Base directory for outputs (relative to XLFusion root)
+  output_base: "batch_output"
+
+  # Continue processing other jobs if one fails
+  continue_on_error: true
+
+  # Maximum parallel jobs (future feature, currently 1)
+  max_parallel: 1
+
+  # Global logging level: DEBUG, INFO, WARNING, ERROR
+  log_level: "INFO"
+
+# Batch jobs - each job is a complete fusion configuration
+batch_jobs:
+  # Example 1: Hybrid mode - Artistic style mix
+  - name: "Artistic_Style_Mix"
+    mode: "hybrid"
+    description: "Mix artistic style with realistic base"
+
+    # Real models from the repository
+    models:
+      - "novaFurryXL_illustriousV110.safetensors"  # Realistic base
+      - "iffymixXL_iffymixHDRemixV2.safetensors"   # Artistic style
+
+    # Backbone model index (provides CLIP and VAE)
+    backbone: 0
+
+    # Hybrid configuration - PerRes assignment with weighted blending
+    hybrid_config:
+      down_0_1: {0: 0.7, 1: 0.3}  # Composition: 70% realistic, 30% artistic
+      down_2_3: {0: 0.6, 1: 0.4}  # Details: 60% realistic, 40% artistic
+      mid: {0: 0.5, 1: 0.5}       # Abstract: 50/50 blend
+      up_0_1: {1: 0.8, 0: 0.2}    # Reconstruction: 80% artistic, 20% realistic
+      up_2_3: {1: 1.0}             # Final style: 100% artistic
+
+    # Cross-attention locks for consistency
+    attn2_locks:
+      down: 0  # Lock down blocks to realistic model
+      mid: 0   # Lock mid to realistic model
+      up: 1    # Lock up blocks to artistic model
+
+    # Optional custom output name (auto-versioned if not specified)
+    output_name: "ArtisticMix"
+
+  # Example 2: PerRes mode - Detail enhancement
+  - name: "Detail_Enhancement"
+    mode: "perres"
+    description: "Enhance details while preserving composition"
+
+    models:
+      - "novaKemonoXL_v40.safetensors"           # Base model
+      - "yiffInHell_yihV30.safetensors"          # Detail model
+
+    backbone: 0
+
+    # PerRes assignments - 100% assignment by block group
+    assignments:
+      down_0_1: 0  # Base model for composition
+      down_2_3: 1  # Detail model for semantic details
+      mid: 0       # Base model for abstract processing
+      up_0_1: 1    # Detail model for reconstruction
+      up_2_3: 1    # Detail model for final textures
+
+    # Enable cross-attention locks
+    attn2_locks:
+      down: 0
+      mid: 0
+      up: 1
+
+  # Example 3: Legacy mode - Classic weighted merge
+  - name: "Classic_Weighted_Merge"
+    mode: "legacy"
+    description: "Traditional 60/40 weighted merge with LoRA baking"
+
+    models:
+      - "furrytoonmix_xlIllustriousV2.safetensors"  # Model A
+      - "novaAnimalXL_illustriousV70.safetensors"   # Model B
+
+    # Weights for each model (must sum to 1.0)
+    weights: [0.6, 0.4]
+
+    backbone: 0
+
+    # Block multipliers for fine control
+    block_multipliers:
+      - {down: 1.0, mid: 1.0, up: 1.0}  # Model A multipliers
+      - {down: 1.2, mid: 0.8, up: 1.0}  # Model B multipliers (boost down, reduce mid)
+
+    # Cross-attention boosts
+    crossattn_boosts:
+      - {down: 1.0, mid: 1.0, up: 1.0}
+      - {down: 1.1, mid: 1.0, up: 1.0}  # Slight boost for model B down blocks
+
+    # LoRAs to bake (optional - commented out as no LoRAs available)
+    # loras:
+    #   - {file: "detail_enhancer.safetensors", scale: 0.3}
+    #   - {file: "sharpness_boost.safetensors", scale: 0.2}
+
+  # Example 4: Simple hybrid with templates
+  - name: "Quick_Style_Transfer"
+    mode: "hybrid"
+    description: "Quick style transfer using real models"
+
+    models:
+      - "novaFurryXL_illustriousV110.safetensors"  # Content model
+      - "bananaSplitzXL_vee6PointOh.safetensors"    # Style model
+
+    backbone: 0
+
+    # Simple hybrid configuration
+    hybrid_config:
+      down_0_1: {0: 0.8, 1: 0.2}  # Preserve composition
+      down_2_3: {0: 0.8, 1: 0.2}  # Preserve details
+      mid: {0: 0.5, 1: 0.5}       # Balanced abstract
+      up_0_1: {0: 0.2, 1: 0.8}    # Apply style
+      up_2_3: {0: 0.2, 1: 0.8}    # Final style
+
+    attn2_locks:
+      down: 0
+      mid: 0
+      up: 1
+
+    output_name: "QuickStyleTransfer"
+
+  # Example 5: Hybrid mode - Real models from the repository
+  - name: "Furry_Illustrative_Hybrid"
+    mode: "hybrid"
+    description: "Hybrid fusion combining illustrative base with cartoon/animal style"
+
+    # Real models from the repository
+    models:
+      - "novaFurryXL_illustriousV110.safetensors"  # Illustrative base model
+      - "bananaSplitzXL_vee6PointOh.safetensors"    # Cartoon/animal style model
+
+    # Backbone model index (provides CLIP and VAE)
+    backbone: 0
+
+    # Hybrid configuration - PerRes assignment with weighted blending
+    # Preserves composition in down blocks, applies style in up blocks
+    hybrid_config:
+      down_0_1: {0: 0.8, 1: 0.2}  # Composition: 80% illustrative, 20% cartoon
+      down_2_3: {0: 0.7, 1: 0.3}  # Details: 70% illustrative, 30% cartoon
+      mid: {0: 0.6, 1: 0.4}       # Abstract: 60% illustrative, 40% cartoon
+      up_0_1: {0: 0.3, 1: 0.7}    # Reconstruction: 30% illustrative, 70% cartoon
+      up_2_3: {0: 0.2, 1: 0.8}    # Final style: 20% illustrative, 80% cartoon
+
+    # Cross-attention locks for consistency
+    attn2_locks:
+      down: 0  # Lock down blocks to illustrative model
+      mid: 0   # Lock mid to illustrative model
+      up: 1    # Lock up blocks to cartoon model
+
+    # Optional custom output name (auto-versioned if not specified)
+    output_name: "FurryIllustrativeHybrid"
+
+# Templates section - predefined configurations
+templates:
+  style_transfer:
+    mode: "hybrid"
+    description: "Transfer artistic style while preserving content structure"
+    default_params:
+      primary_weight: 0.7
+      style_focus: "up_blocks"  # Focus style on up blocks
+      content_focus: "down_blocks"  # Preserve content in down blocks
+
+    # Template configuration (parameters will be interpolated)
+    config_template:
+      backbone: 0
+      hybrid_config:
+        down_0_1: {0: "{{primary_weight}}", 1: "{{1 - primary_weight}}"}
+        down_2_3: {0: "{{primary_weight}}", 1: "{{1 - primary_weight}}"}
+        mid: {0: 0.5, 1: 0.5}
+        up_0_1: {1: "{{primary_weight}}", 0: "{{1 - primary_weight}}"}
+        up_2_3: {1: "{{primary_weight}}", 0: "{{1 - primary_weight}}"}
+      attn2_locks:
+        down: 0
+        mid: 0
+        up: 1
+
+  balanced_merge:
+    mode: "legacy"
+    description: "Classic 50/50 weighted merge"
+    config_template:
+      weights: [0.5, 0.5]
+      backbone: 0
+
+  detail_enhance:
+    mode: "perres"
+    description: "Enhance details using complementary models"
+    config_template:
+      backbone: 0
+      assignments:
+        down_0_1: 0
+        down_2_3: 1
+        mid: 0
+        up_0_1: 1
+        up_2_3: 1
+      attn2_locks:
+        down: 0
+        mid: 0
+        up: 1

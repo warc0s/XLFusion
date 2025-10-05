@@ -1,0 +1,18 @@
+# Test batch configuration for validation
+version: "1.2"
+
+global_settings:
+  output_base: "test_output"
+  continue_on_error: true
+  max_parallel: 1
+  log_level: "INFO"
+
+batch_jobs:
+  - name: "test_job"
+    mode: "legacy"
+    description: "Test job for validation"
+    models:
+      - "test_model_a.safetensors"
+      - "test_model_b.safetensors"
+    weights: [0.5, 0.5]
+    backbone: 0

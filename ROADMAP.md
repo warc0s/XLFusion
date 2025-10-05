@@ -1,145 +1,99 @@
-# XLFusion - Hoja de Ruta
+### V2.1 Corrección, validación y UX técnica
 
-> **Work in Progress**
-> Esta hoja de ruta está sujeta a cambios según disponibilidad de tiempo libre y feedback de la comunidad.
+Objetivo: resultados más predecibles y configuración robusta.
 
-## Versiones Actuales
+1. Validación consistente de configuraciones
+   • Generaliza la validación a todos los modos. Ahora solo `validate_hybrid_config` hace chequeos serios. Extrae un validador común que verifique: suma de pesos por bloque, índices, existencia de claves y forma de tensores cuando hay locks. Ganchos en `XLFusion.py` antes de llamar a la fusión.  
 
-### V1.0 (Actual)
-- Modo Legacy: Fusión ponderada con control por bloques
-- Modo PerRes: Asignación por resolución con control preciso
-- Sistema de configuración YAML centralizado
-- Soporte para LoRAs (modo Legacy)
-- Versionado automático
-- Metadatos y logs de auditoría
+Criterio de aceptación: una configuración inválida nunca llega a `merge_*`; los mensajes de error indican bloque, índice y causa.
 
-## Roadmap Futuro
+2. Arreglar semántica para N modelos en CLI
+   • `prompt_block_merge` y `prompt_crossattn_boost` no deben asignar “1 − w” a todos los modelos no cero. Cambia a un input vectorial por modelo o a normalización automática de la fila. Actualiza GUI Hybrid y Legacy para denotar distribución correcta por bloque.  
 
-### V1.1 - Modo Híbrido
-**Objetivo**: Fusionar las capacidades de Legacy y PerRes en un solo modo unificado
+Criterio: con 3 modelos puedes definir boosts y multiplicadores por bloque y la suma se normaliza a 1.0 por bloque.
 
-**Características planeadas:**
-- **Modo Híbrido**: Combinar ponderación (Legacy) con asignación por resolución (PerRes)
-- **Control granular**: Aplicar diferentes pesos a diferentes bloques de resolución
-- **Compatibilidad total**: Mantener soporte para configuraciones Legacy y PerRes existentes
-- **UI mejorada**: Interfaz más intuitiva para configurar el modo híbrido
+3. Modo “plan” o preflight
+   • En CLI y GUI, añade un paso que calcule memoria estimada, número de claves afectadas por bloque y advertencias de compatibilidad antes de ejecutar. Ya usas estimación de memoria dentro de `merge_*`; expón ese cálculo y llámalo en la vista previa.  
 
-**Beneficios:**
-- Máxima flexibilidad en la fusión de modelos
-- Mejor control sobre aspectos específicos (composición, detalles, estilo)
-- Aprovecha lo mejor de ambos modos actuales
+Criterio: el usuario ve memoria estimada, conteo por bloque, locks efectivos y avisos antes de pulsar “Iniciar fusión”.
+
+4. Metadatos fortalecidos
+   • En `save_merge_results` agrega huellas BLAKE2 de cada checkpoint y LoRA, versión de torch, parámetros exactos por bloque y device. Es el sitio adecuado para ampliar lo que luego rehidratas vía YAML. 
+
+Criterio: `metadata.txt` y el metadato embebido incluyen hashes de entrada y configuración completa reproducible.
+
+5. Progreso determinista
+   • En GUI reemplaza la barra indeterminada por progreso real usando `len(base_keys)` del backbone y cuenta de claves procesadas en los bucles de `merge_*`. Ya iteras clave a clave con tqdm. Propaga ticks a la cola de log.  
 
 ---
 
-### V1.2 - Fusión por Lotes (Batch)
-**Objetivo**: Permitir fusiones automatizadas mediante configuración JSON/YAML
+### V2.2 Rendimiento y escalabilidad
 
-**Características planeadas:**
-- **Configuración JSON/YAML**: Definir múltiples fusiones en un archivo
-- **Procesamiento por lotes**: Ejecutar fusiones sin interacción CLI
-- **Templates predefinidos**: Configuraciones comunes para diferentes tipos de fusión
-- **Validación de configuración**: Verificar archivos de configuración antes de procesar
-- **Progreso detallado**: Barra de progreso y logs para fusiones múltiples
+Objetivo: acelerar sin romper memoria.
 
-**Formato de configuración ejemplo:**
-```yaml
-batch_jobs:
-  - name: "Artistic_Mix"
-    mode: "hybrid"
-    models: ["model_a.safetensors", "model_b.safetensors"]
-    weights: [0.7, 0.3]
-    resolution_assignments:
-      down_0_1: "model_a"
-      down_2_3: "model_b"
+1. E/S paralela segura
+   • Las lecturas desde `safe_open` son I/O bound. Paraleliza la extracción por clave entre modelos con un pool de hilos o prefetch de tensores en colas. Mantén la suma en el hilo principal para no fragmentar memoria. 
 
-  - name: "Style_Transfer"
-    mode: "perres"
-    models: ["base.safetensors", "style.safetensors"]
-    # ... más configuración
-```
+Criterio: mejora del 15 a 30 % en throughput en discos NVMe en pruebas con 2 y 3 modelos.
 
-**Beneficios:**
-- Automatización de flujos de trabajo repetitivos
-- Reproducibilidad exacta de fusiones
-- Procesamiento masivo sin supervisión
-- Integración con pipelines de ML
+2. Lote por bloque
+   • En Hybrid y PerRes, procesa claves agrupadas por bloque para minimizar cambios de manejador. Ya tienes `get_block_assignment` y stats por bloque. Ordena las listas antes de iterar. 
 
 ---
 
-### V1.3 - Análisis Avanzado
-**Objetivo**: Herramientas de análisis y comparación de modelos
+### V2.3 Extensibilidad y limpieza interna
 
-**Características planeadas:**
-- **Análisis de diferencias**: Comparar modelos y detectar cambios significativos
-- **Predicción de resultados**: Estimación de características del modelo fusionado
-- **Visualización de estructura**: Mapas de calor de diferencias entre modelos
-- **Métricas de compatibilidad**: Puntuación de qué tan bien se fusionarán dos modelos
-- **Recomendaciones inteligentes**: Sugerencias automáticas de configuración
+Objetivo: desacoplar y permitir ampliar.
 
----
+1. Motor de plantillas único
+   • Ahora hay dos sistemas de plantillas: uno simple en `templates.py` y otro con evaluación segura en el batch via `interpolate_params`. Unifica el segundo como servicio reusable y úsalo en CLI y GUI cuando el usuario seleccione una plantilla.  
 
-### V2.0 - Interfaz Gráfica (.exe)
-**Objetivo**: Aplicación ejecutable para usuarios no técnicos (Windows)
-
-**Características planeadas:**
-- **Ejecutable independiente**: Aplicación .exe sin dependencias externas
-- **GUI nativa**: Interfaz gráfica intuitiva para Windows
-- **Vista previa visual**: Comparación visual de configuraciones
-- **Asistente guiado**: Wizard paso a paso para nuevos usuarios
-- **Gestión de modelos**: Biblioteca de modelos con metadatos
-- **Instalación simple**: Un solo archivo ejecutable, sin setup complejo
-
-**Nota**: El ejecutable será exclusivo para Windows. Usuarios de Linux/macOS continuarán usando el script Python directamente.
+2. Plugins de mapeo de bloques
+   • `blocks.get_block_assignment` gobierna todo. Define un registro de patrones para admitir arquitecturas o particionados alternativos sin tocar `merge.py` ni `analyzer.py`.  
 
 ---
 
-### V2.1 - Funciones Experimentales
-**Objetivo**: Técnicas avanzadas de fusión
+### V2.4 Calidad de fusión y análisis avanzado
 
-**Características planeadas:**
-- **Fusión diferencial**: Técnicas basadas en diferencias entre modelos
-- **Fusión por capas semánticas**: Control basado en el significado de las capas
-- **Optimización automática**: Búsqueda automática de mejores configuraciones
-- **Fusión condicional**: Diferentes configuraciones según el prompt
+Objetivo: que las decisiones de mezcla se apoyen en métricas útiles.
 
----
+1. Analítica cuantitativa ampliada
+   • En `analyzer.py` amplía el muestreo de similitud y añade métricas por submódulo y capa. Registra histogramas de cosenos y L2 por bloque y un score de “coherencia estructural” independiente de estilo. 
 
-## Prioridades de Desarrollo
+2. Autoajuste de pesos
+   • Implementa una búsqueda de cuadrícula o bayesiana sobre 2 o 3 grados de libertad por bloque, con la métrica anterior como objetivo y restricciones de dominancia máxima por modelo. Devuelve una plantilla Hybrid recomendada. 
 
-### Alta Prioridad
-1. **V1.1 - Modo Híbrido**: Máximo impacto, complejidad media
-2. **V1.2 - Fusión por Lotes**: Alta demanda de automatización
-
-### Media Prioridad
-3. **V1.3 - Análisis Avanzado**: Funcionalidad diferenciadora
-4. **V2.0 - Interfaz Gráfica**: Mejora de usabilidad
-
-### Baja Prioridad
-5. **V2.1 - Experimental**: Investigación y desarrollo a largo plazo
-
-## Contribuciones de la Comunidad
-
-### Cómo Contribuir
-- **Issues**: Reportar bugs y solicitar características
-- **Pull Requests**: Implementaciones de funcionalidades
-- **Testing**: Pruebas con diferentes modelos y configuraciones
-- **Documentación**: Mejoras en guías y tutoriales
-
+3. Informe de previsión en GUI
+   • Integra `FusionPredictor` en la vista previa. Muestra dominancia prevista por bloque y alerta de baja diversidad.  
 
 ---
 
-## Notas Finales
+### V2.5 Reproducibilidad, auditoría y seguridad
 
-Esta hoja de ruta refleja la visión a largo plazo de XLFusion, pero está sujeta a:
+Objetivo: trazabilidad fuerte y ejecución segura.
 
-- **Disponibilidad de tiempo**: Desarrollo realizado en tiempo libre
-- **Feedback de usuarios**: Prioridades basadas en necesidades reales
-- **Evolución tecnológica**: Adaptación a nuevas técnicas y formatos
-- **Recursos de desarrollo**: Limitaciones de tiempo y capacidad
+1. Auditoría exhaustiva
+   • `BatchProcessor` ya crea un log y YAML. Añade registro de hashes de entrada, huellas del entorno y un inventario de claves realmente tomadas del backbone vs. sustituidas. 
 
-**Tienes sugerencias o quieres contribuir?**
-Abre un issue en el repositorio o contáctame a través de [LinkedIn](https://www.linkedin.com/in/marcosgarest/).
+2. Esquema de configuración validado
+   • Define un esquema pydantic para los YAML de batch y para los presets de GUI. Valida antes de ejecutar en todos los modos. 
+
+3. Modo “sólo UNet” opcional en todos los modos
+   • En Legacy ya existe `only_unet=True`. Expónlo en CLI y GUI y añade la opción de incluir VAE y text encoder cuando el usuario quiera. Cambios mínimos en `stream_weighted_merge_from_paths` y en orquestación.  
 
 ---
 
-*Última actualización: Septiembre 2025*
+### V2.6 Ampliaciones funcionales de alto impacto
+
+Objetivo: personalización real y casos avanzados.
+
+1. Álgebra de checkpoints
+   • Añade operaciones A + α(B − C) en Legacy y Hybrid. Nueva bandera CLI y controles GUI. Se implementa reusando el streaming: carga clave de B y C, calcula delta y añade a A según pesos del bloque. 
+
+Criterio: prueba unitaria con tensores sintéticos que verifica que el resultado coincide con la aritmética.
+
+2. Soporte LoRA ampliado
+   • `lora.py` solo cubre UNet. Extiende mapeos para text encoders cuando existan claves LoRA correspondientes y añade validación de forma. Reporte de aplicados y omitidos por submódulo. 
+
+3. Plantillas guiadas “objetivo” en GUI
+   • Inserta las plantillas de `templates.py` en el paso de configuración con explicación y parámetros editables, usando el motor unificado del punto V2.3.  

@@ -1,7 +1,10 @@
-# XLFusion V1.0 Configuration
+# XLFusion V2.0 Configuration
 # =====================================
 # Centralized configuration for XLFusion checkpoint merger
 # This file controls all aspects of model merging behavior, naming, and output
+# V1.1 adds Hybrid mode combining PerRes assignment with weighted blending
+# V1.2 adds Batch Processing mode for automated multi-model fusion workflows
+# V2.0 adds the graphical user interface and Windows executable support
 
 
 # =====================================
@@ -73,6 +76,21 @@ merge_defaults:
     # false = independent attention | true = locked attention patterns
     cross_attention_locks: false
 
+  # Hybrid mode (V1.1 NEW): Combines PerRes assignment with weighted blending
+  hybrid:
+    # Default primary model weight for each block group (remaining weight distributed to secondary models)
+    primary_model_weight: 0.7
+
+    # Cross-attention locks for improved prompt consistency across models
+    # false = independent attention | true = locked attention patterns
+    cross_attention_locks: false
+
+    # Enable automatic weight normalization to ensure weights sum to 1.0 for each block group
+    auto_normalize_weights: true
+
+    # Minimum weight threshold for a model to contribute to a block group
+    minimum_weight_threshold: 0.01
+
 
 # =====================================
 # APPLICATION SETTINGS
@@ -85,4 +103,4 @@ app:
 
   # Application version - recorded in metadata for merge reproducibility
   # Format: "major.minor" (e.g., "1.0", "1.1", "2.0")
-  version: "1.0"
+  version: "2.0"

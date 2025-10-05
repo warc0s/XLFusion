@@ -161,16 +161,21 @@ cython_debug/
 # Claude Code specific
 .claude/
 
-# Model files and outputs (large binary files)
-models/*.safetensors
-loras/*.safetensors
-output/*.safetensors
+# Model and output directories (ignore all contents except placeholders)
+# This prevents committing large/binary artifacts and local results.
+models/**
+loras/**
+output/**
+metadata/**
 
-# Keep placeholder files but ignore the actual model/output files
+# Keep placeholder files
 !models/insert_models_here.txt
 !loras/insert_loras_here.txt
 !output/merged_models_output_here.txt
 !metadata/audit_logs_here.txt
+
+# If you still want to ignore only safetensors anywhere as a fallback
+*.safetensors
 
 # Temporary files
 *.tmp
@@ -188,3 +193,10 @@ Thumbs.db
 *.bak
 *.backup
 *~
+
+# OpenCode configuration (development tool)
+opencode.json
+.opencode/
+
+# Local agent metadata/config
+AGENTS.md
