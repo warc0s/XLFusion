@@ -1,4 +1,4 @@
-"""Utilidades de orquestacion compartidas entre CLI y GUI."""
+"""Shared orchestration utilities between CLI and GUI."""
 from __future__ import annotations
 
 import time
@@ -12,13 +12,13 @@ from .memory import save_state
 
 
 def _build_metadata_header(version: str, mode: str, model_names: Iterable[str]) -> str:
-    """Genera el encabezado humano legible para metadata.txt."""
+    """Generate a human-readable header for metadata.txt."""
     lines = [
-        f"XLFusion V{version} - Metadata de fusion",
+        f"XLFusion V{version} - Merge Metadata",
         "=" * 50,
         "",
-        f"Modo: {mode}",
-        f"Modelos: {', '.join(model_names)}",
+        f"Mode: {mode}",
+        f"Models: {', '.join(model_names)}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -43,21 +43,20 @@ def save_merge_results(
     model_paths: Optional[List[Path]] = None,
     lora_paths: Optional[List[Path]] = None,
 ) -> Tuple[Path, Path, int]:
-    """Persistencia unificada del modelo fusionado y archivos auxiliares.
+    """Unified persistence of the merged model and auxiliary files.
 
     Args:
-        output_dir: Directorio destino para el checkpoint fusionado.
-        metadata_dir: Directorio raíz para metadata estructurada.
-        merged_state: Estado del modelo resultante.
-        model_names: Lista de nombres de modelos origen.
-        mode: Modo de fusión utilizado (legacy/perres/hybrid).
-        backbone_idx: Índice del modelo backbone dentro de la selección.
-        yaml_kwargs: Parámetros adicionales para reconstruir la configuración
-            vía ``generate_batch_config_yaml`` (por ejemplo ``weights`` o
-            ``assignments``).
+        output_dir: Destination directory for the merged checkpoint.
+        metadata_dir: Root directory for structured metadata.
+        merged_state: State dict of the resulting model.
+        model_names: List of source model names.
+        mode: Fusion mode used (legacy/perres/hybrid).
+        backbone_idx: Index of the backbone model within the selection.
+        yaml_kwargs: Extra parameters to reconstruct the configuration via
+            ``generate_batch_config_yaml`` (e.g., ``weights`` or ``assignments``).
 
     Returns:
-        Una tupla con ``(ruta_output, carpeta_metadata, versión)``.
+        A tuple ``(output_path, metadata_folder, version)``.
     """
 
     model_names = list(model_names)
@@ -89,7 +88,7 @@ def save_merge_results(
             fh.write(f"Torch: {torch.__version__}\n")
         except Exception:
             pass
-        fh.write("\nEntradas:\n")
+        fh.write("\nInputs:\n")
         # Hashes de modelos
         if model_paths:
             for p in model_paths:
@@ -110,9 +109,9 @@ def save_merge_results(
                 except Exception:
                     fh.write(f"  LORA  {lp.name}  blake2b=ERROR\n")
 
-        # Configuracion exacta usada (como kwargs crudos)
+        # Exact configuration used (as raw kwargs)
         if yaml_kwargs:
-            fh.write("\nConfiguracion (kwargs):\n")
+            fh.write("\nConfiguration (kwargs):\n")
             for k, v in yaml_kwargs.items():
                 fh.write(f"  {k}: {v}\n")
 
@@ -129,7 +128,7 @@ def save_merge_results(
     except Exception as exc:  # pragma: no cover - fail gracefully
         warning_path = metadata_folder / "batch_config.error.txt"
         with open(warning_path, "w", encoding="utf-8") as fh:
-            fh.write(f"No se pudo generar batch_config.yaml: {exc}\n")
+            fh.write(f"Could not generate batch_config.yaml: {exc}\n")
         return output_path, metadata_folder, version
 
     batch_yaml_path = metadata_folder / "batch_config.yaml"

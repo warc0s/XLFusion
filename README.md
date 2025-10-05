@@ -1,187 +1,187 @@
 # XLFusion V2.0
 
-Fusionador profesional de checkpoints SDXL con CLI y GUI, orientado a reproducibilidad, control por bloques y workflows por lotes. Incluye tres modos de fusión (Legacy, PerRes y Hybrid), horneado de LoRAs, análisis avanzado y metadatos completos.
+Professional SDXL checkpoint merger with CLI and GUI, focused on reproducibility, per-block control, and batch workflows. It includes three merge modes (Legacy, PerRes, and Hybrid), LoRA baking, advanced analysis, and complete metadata.
 
-## Novedades V2
+## What's New in V2
 
-- GUI nativa (Tk) con asistente paso a paso y vista previa por bloques.
-- Modo Hybrid: asignación por bloque + mezcla ponderada.
-- Procesamiento por lotes (batch) con validación, logs y YAML reproducible.
-- Análisis (diff, compatibilidad, predicción, recomendaciones).
-- Metadatos enriquecidos: hashes BLAKE2 de entradas, YAML autocontenible y versionado automático.
+- Native GUI (Tk) with a step-by-step assistant and per-block preview.
+- Hybrid mode: per-block assignment + weighted mixing.
+- Batch processing with validation, logs, and reproducible YAML.
+- Analysis tools (diff, compatibility, prediction, recommendations).
+- Enriched metadata: BLAKE2 hashes of inputs, self-contained YAML, and automatic versioning.
 
-## Modos de fusión
+## Merge Modes
 
-- Legacy (ponderado clásico)
-  - Pesos globales por modelo, control opcional por bloques gruesos `down/mid/up` y multiplicadores por grupos `down_0_1`, `down_2_3`, `mid`, `up_0_1`, `up_2_3`.
-  - Cross-attention boost (mejora adherencia al prompt).
-  - Horneado de LoRAs en el resultado.
-  - Proceso streaming optimizado en memoria.
+- Legacy (classic weighted)
+  - Global weights per model, optional coarse per-block control `down/mid/up` and group multipliers `down_0_1`, `down_2_3`, `mid`, `up_0_1`, `up_2_3`.
+  - Cross-attention boost (improves prompt adherence).
+  - LoRA baking into the result.
+  - Memory-optimized streaming process.
 
-- PerRes (por resolución)
-  - Asignación 100% por grupo de bloques: `down_0_1`, `down_2_3`, `mid`, `up_0_1`, `up_2_3`.
-  - Locks opcionales de cross-attention (`down/mid/up`).
+- PerRes (by resolution)
+  - 100% assignment per block group: `down_0_1`, `down_2_3`, `mid`, `up_0_1`, `up_2_3`.
+  - Optional cross-attention locks (`down/mid/up`).
 
-- Hybrid (PerRes + mezcla)
-  - Por bloque defines pesos por modelo (suma ≈ 1.0), con soporte de locks.
-  - Ideal para transferir estilo en `up_*` y preservar composición en `down_*`.
+- Hybrid (PerRes + mixing)
+  - Define per-block weights per model (sum ≈ 1.0), with lock support.
+  - Ideal for transferring style in `up_*` while preserving composition in `down_*`.
 
-Compatibilidad técnica:
-- Modelos SDXL derivados (NoobAI, Illustrious, Pony, etc.).
-- Entradas/Salidas `.safetensors` compatibles A1111/ComfyUI.
+Technical compatibility:
+- SDXL-derived models (NoobAI, Illustrious, Pony, etc.).
+- `.safetensors` inputs/outputs compatible with A1111/ComfyUI.
 
-## Requisitos e instalación
+## Requirements and Installation
 
-Requiere Python 3.10+ y los paquetes de `requirements.txt`:
+Requires Python 3.10+ and the packages listed in `requirements.txt`:
 
 ```
 pip install -r requirements.txt
 ```
 
-Paquetes principales: `torch`, `safetensors`, `PyYAML`, `numpy`, `tqdm`, `psutil`.
+Main packages: `torch`, `safetensors`, `PyYAML`, `numpy`, `tqdm`, `psutil`.
 
-Nota: Si empaquetas la GUI en Windows, instala además `pyinstaller` y usa `scripts/build_gui_exe.py`.
+Note: If you package the GUI on Windows, also install `pyinstaller` and use `scripts/build_gui_exe.py`.
 
-## Estructura de carpetas
+## Folder Structure
 
 ```
 XLFusion/
-├── XLFusion.py                 # Entrada CLI principal
-├── gui_app.py                  # Interfaz gráfica (V2)
-├── config.yaml                 # Configuración centralizada
-├── Utils/                      # Módulos internos (merge, lora, batch, analyzer, ...)
-├── models/                     # Checkpoints de entrada (.safetensors)
-├── loras/                      # LoRAs (.safetensors) opcionales
-├── output/                     # Resultados fusionados
-├── metadata/                   # Metadatos y auditorías
-├── scripts/                    # Utilidades (batch, smoke, build exe)
-└── tests/                      # Pruebas unitarias
+├── XLFusion.py                 # Main CLI entry point
+├── gui_app.py                  # Graphical interface (V2)
+├── config.yaml                 # Centralized configuration
+├── Utils/                      # Internal modules (merge, lora, batch, analyzer, ...)
+├── models/                     # Input checkpoints (.safetensors)
+├── loras/                      # Optional LoRAs (.safetensors)
+├── output/                     # Merged results
+├── metadata/                   # Metadata and audit logs
+├── scripts/                    # Utilities (batch, smoke, build exe)
+└── tests/                      # Unit tests
 ```
 
-## Uso rápido (CLI interactivo)
+## Quick Start (Interactive CLI)
 
-1) Coloca modelos `.safetensors` en `models/` y (opcional) LoRAs en `loras/`.
-2) Ejecuta:
+1) Place `.safetensors` models in `models/` and (optionally) LoRAs in `loras/`.
+2) Run:
 
 ```
 python XLFusion.py
 ```
 
-3) Selecciona modelos, el modo de fusión y ajusta la configuración.
-4) El resultado se guarda en `output/` y la auditoría en `metadata/`.
+3) Select models, choose the merge mode, and adjust configuration.
+4) The result is saved in `output/` and the audit in `metadata/`.
 
-## GUI (Asistente gráfico)
+## GUI (Graphical Assistant)
 
-Lanza la GUI con:
+Launch the GUI with:
 
 ```
 python XLFusion.py --gui
 ```
 
-Características de la GUI:
-- Biblioteca de modelos con tamaño, selección múltiple y orden.
-- Configuración guiada por modo (Legacy, PerRes, Hybrid) y LoRAs.
-- Vista previa por bloques con pesos/asignaciones.
-- Progreso real y cancelación segura.
+GUI features:
+- Model library with size, multi-selection, and sorting.
+- Mode-guided configuration (Legacy, PerRes, Hybrid) and LoRAs.
+- Per-block preview with weights/assignments.
+- Real progress and safe cancellation.
 
-## Procesamiento por lotes (Batch)
+## Batch Processing
 
-Permite definir múltiples trabajos en un `YAML` y procesarlos secuencialmente con validación y logs.
+Define multiple jobs in a `YAML` and process them sequentially with validation and logs.
 
-- Ejecutar batch:
+- Run batch:
 
 ```
 python XLFusion.py --batch batch_config_example.yaml
 ```
 
-- Validar únicamente:
+- Validate only:
 
 ```
 python XLFusion.py --batch batch_config_example.yaml --validate-only
 ```
 
-Consulta `batch_config_example.yaml` y `tests/test_batch_full.yaml` para ejemplos de:
-- Legacy con `weights`, `block_multipliers`, `crossattn_boosts` y `loras`.
-- PerRes con `assignments` y `attn2_locks`.
-- Hybrid con `hybrid_config` y `attn2_locks`.
+See `batch_config_example.yaml` and `tests/test_batch_full.yaml` for examples of:
+- Legacy with `weights`, `block_multipliers`, `crossattn_boosts`, and `loras`.
+- PerRes with `assignments` and `attn2_locks`.
+- Hybrid with `hybrid_config` and `attn2_locks`.
 
-También hay plantillas en `Utils/templates.py` y sección `templates` en el YAML de ejemplo.
+There are also templates in `Utils/templates.py` and a `templates` section in the example YAML.
 
-Atajos:
+Shortcuts:
 - `scripts/run_batch.sh <config.yaml>`
 - `scripts/run_batch_validate.sh <config.yaml>`
 
-## Modo análisis (V1.3)
+## Analysis Mode (V1.3)
 
-Herramientas para entender diferencias, compatibilidad y predecir características de fusión.
+Tools to understand differences, compatibility, and predict merge characteristics.
 
-Ejemplos:
+Examples:
 
 ```
-# Comparación entre dos modelos (por índice mostrado)
+# Comparison between two models (by shown index)
 python XLFusion.py --analyze --compare 0 1
 
-# Recomendaciones para objetivo concreto
+# Recommendations for a specific goal
 python XLFusion.py --analyze --recommend balanced
 
-# Exportar informe a JSON
+# Export report to JSON
 python XLFusion.py --analyze --compare 0 1 --export-analysis report.json
 ```
 
-Métricas clave: similitud coseno por bloque, cambios relativos, avisos de arquitectura, puntuación de compatibilidad y recomendaciones.
+Key metrics: cosine similarity per block, relative changes, architecture warnings, compatibility score, and recommendations.
 
-## Configuración (`config.yaml`)
+## Configuration (`config.yaml`)
 
-Se centraliza el nombre de salida, versionado, rutas y defaults.
+Centralizes the output name, versioning, paths, and defaults.
 
 - `model_output`:
-  - `base_name`: prefijo del archivo resultante (p.ej. `XLFusion_V1.safetensors`).
+  - `base_name`: output filename prefix (e.g., `XLFusion_V1.safetensors`).
   - `version_prefix`: `V`, `v`, `Ver`, etc.
-  - `file_extension`: siempre `.safetensors`.
+  - `file_extension`: always `.safetensors`.
   - `output_dir`, `metadata_dir`, `auto_version`.
 
 - `directories`:
   - `models`, `loras`, `output`, `metadata`.
 
 - `merge_defaults`:
-  - `legacy`: multiplicadores y `cross_attention_boost` por defecto.
-  - `perres`: `cross_attention_locks` por defecto.
-  - `hybrid`: normalización automática, pesos mínimos, locks por defecto.
+  - `legacy`: default multipliers and `cross_attention_boost`.
+  - `perres`: default `cross_attention_locks`.
+  - `hybrid`: auto-normalization, minimum weights, default locks.
 
 - `app`:
-  - `tool_name`, `version` (incluido en metadatos).
+  - `tool_name`, `version` (included in metadata).
 
-## Salida y metadatos
+## Output and Metadata
 
-- Modelos: `XLFusion_V{n}.safetensors` en `output/`.
-- Metadatos: carpeta `metadata/meta_{n}/` con:
-  - `metadata.txt`: resumen humano-legible, hashes BLAKE2 de entradas (modelos y LoRAs) y kwargs exactos.
-  - `batch_config.yaml`: configuración reproducible del trabajo para rehacer el resultado.
+- Models: `XLFusion_V{n}.safetensors` in `output/`.
+- Metadata: folder `metadata/meta_{n}/` with:
+  - `metadata.txt`: human-readable summary, BLAKE2 hashes of inputs (models and LoRAs), and exact kwargs.
+  - `batch_config.yaml`: reproducible job configuration to recreate the result.
 
-Los metadatos también se incrustan en el propio `.safetensors`.
+Metadata is also embedded in the `.safetensors` file itself.
 
-## Buenas prácticas y rendimiento
+## Best Practices and Performance
 
-- Revisa el aviso de memoria estimada antes de grandes fusiones.
-- En Legacy, normaliza pesos; con `block_multipliers` y `crossattn_boosts` puedes afinar comportamiento.
-- Con PerRes/Hybrid, usa `attn2_locks` para consistencia del texto.
-- El modo streaming evita cargar todo en GPU/CPU simultáneamente.
+- Check the estimated memory notice before large merges.
+- In Legacy, normalize weights; use `block_multipliers` and `crossattn_boosts` to fine-tune behavior.
+- With PerRes/Hybrid, use `attn2_locks` for text consistency.
+- The streaming mode avoids loading everything into GPU/CPU at once.
 
-## Pruebas y smoke test
+## Tests and Smoke Test
 
-Este repo incluye pruebas unitarias en `tests/` y un smoke test automatizado que genera modelos sintéticos y limpia residuos:
+This repo includes unit tests in `tests/` and an automated smoke test that generates synthetic models and cleans up artifacts:
 
 ```
 scripts/smoke_test.sh
 ```
 
-El script crea modelos de prueba, ejecuta un batch con 4 jobs y elimina los artefactos temporales al finalizar.
+The script creates test models, runs a batch with 4 jobs, and removes temporary artifacts at the end.
 
 ## Roadmap
 
-Consulta `ROADMAP.md` para objetivos V2.1+ (validación reforzada, preflight de memoria/compatibilidad, mejoras de rendimiento y extensibilidad).
+See `ROADMAP.md` for V2.1+ goals (stronger validation, memory/compatibility preflight, performance and extensibility improvements).
 
-## Créditos y contacto
+## Credits and Contact
 
 - Portfolio: https://warcos.dev/
 - LinkedIn: https://www.linkedin.com/in/marcosgarest/

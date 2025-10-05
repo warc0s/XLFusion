@@ -51,10 +51,10 @@ def map_lora_key_to_base(d_key: str) -> Optional[str]:
     if not d_key.startswith("lora_unet_"):
         return None
     base = d_key[len("lora_unet_"):]
-    # Primero convertir guiones bajos a puntos (estilo comun en LoRAs)
+    # First convert underscores to dots (common style in many LoRAs)
     base = base.replace("_", ".")
-    # Corregir tokens especiales donde el nombre real usa guion bajo
-    # Bloques y submódulos comunes de SDXL
+    # Fix special tokens where the real name uses an underscore
+    # Common SDXL blocks and submodules
     base = base.replace(".down.blocks.", ".down_blocks.")
     base = base.replace("down.blocks.", "down_blocks.")
     base = base.replace(".up.blocks.", ".up_blocks.")
@@ -69,9 +69,9 @@ def map_lora_key_to_base(d_key: str) -> Optional[str]:
     base = base.replace("output.blocks.", "output_blocks.")
     base = base.replace(".transformer.blocks.", ".transformer_blocks.")
     base = base.replace("transformer.blocks.", "transformer_blocks.")
-    # Restaurar proyecciones 'to_x' que deben llevar guion bajo
+    # Restore 'to_x' projections that should use underscores
     base = base.replace(".to.", ".to_")
-    # Sustituir sufijos de LoRA por el peso real (soportar variantes con punto o guion bajo)
+    # Replace LoRA suffixes with the actual weight (support dot/underscore variants)
     base = base.replace(".lora_down.weight", ".weight").replace(".lora_up.weight", ".weight")
     base = base.replace(".lora.down.weight", ".weight").replace(".lora.up.weight", ".weight")
     base = base.replace(".to_q.", ".to_q.").replace(".to_k.", ".to_k.").replace(".to_v.", ".to_v.")

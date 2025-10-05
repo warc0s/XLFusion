@@ -25,7 +25,7 @@ def _clear_children(widget: tk.Widget) -> None:
 
 
 class LegacyConfigPanel(ttk.Frame):
-    """Panel de configuracion para el modo Legacy."""
+    """Configuration panel for Legacy mode."""
 
     def __init__(self, master: tk.Widget) -> None:
         super().__init__(master)
@@ -43,17 +43,17 @@ class LegacyConfigPanel(ttk.Frame):
         self.cross_vars: Dict[tuple[int, str], tk.DoubleVar] = {}
         self.lora_vars: List[Dict[str, tk.Variable]] = []
 
-        self.weights_frame = ttk.LabelFrame(self, text="Pesos globales")
+        self.weights_frame = ttk.LabelFrame(self, text="Global Weights")
         self.weights_frame.pack(fill="x", pady=4)
 
-        self.backbone_frame = ttk.LabelFrame(self, text="Modelo backbone")
+        self.backbone_frame = ttk.LabelFrame(self, text="Backbone Model")
         self.backbone_frame.pack(fill="x", pady=4)
 
-        self.block_section = ttk.LabelFrame(self, text="Multiplicadores por bloque (opcional)")
+        self.block_section = ttk.LabelFrame(self, text="Per-block multipliers (optional)")
         self.block_section.pack(fill="x", pady=4)
         block_toggle = ttk.Checkbutton(
             self.block_section,
-            text="Activar control por bloque",
+            text="Enable per-block control",
             variable=self.blocks_enabled,
             command=self._update_block_state,
         )
@@ -61,11 +61,11 @@ class LegacyConfigPanel(ttk.Frame):
         self.block_table = ttk.Frame(self.block_section)
         self.block_table.pack(fill="x", padx=4, pady=4)
 
-        self.cross_section = ttk.LabelFrame(self, text="Cross-attention boost (opcional)")
+        self.cross_section = ttk.LabelFrame(self, text="Cross-attention boost (optional)")
         self.cross_section.pack(fill="x", pady=4)
         cross_toggle = ttk.Checkbutton(
             self.cross_section,
-            text="Activar control cross-attention",
+            text="Enable cross-attention control",
             variable=self.cross_enabled,
             command=self._update_cross_state,
         )
@@ -73,7 +73,7 @@ class LegacyConfigPanel(ttk.Frame):
         self.cross_table = ttk.Frame(self.cross_section)
         self.cross_table.pack(fill="x", padx=4, pady=4)
 
-        self.lora_section = ttk.LabelFrame(self, text="LoRA baking (opcional)")
+        self.lora_section = ttk.LabelFrame(self, text="LoRA baking (optional)")
         self.lora_section.pack(fill="x", pady=4)
 
     # ------------------------------------------------------------------
@@ -152,8 +152,8 @@ class LegacyConfigPanel(ttk.Frame):
 
         header = ttk.Frame(self.weights_frame)
         header.pack(fill="x", padx=4, pady=(4, 0))
-        ttk.Label(header, text="Modelo", width=50, anchor="w").pack(side="left")
-        ttk.Label(header, text="Peso", width=8).pack(side="right", padx=(4, 0))
+        ttk.Label(header, text="Model", width=50, anchor="w").pack(side="left")
+        ttk.Label(header, text="Weight", width=8).pack(side="right", padx=(4, 0))
 
         for idx, name in enumerate(self.model_names):
             row = ttk.Frame(self.weights_frame)
@@ -174,13 +174,13 @@ class LegacyConfigPanel(ttk.Frame):
 
         controls = ttk.Frame(self.weights_frame)
         controls.pack(fill="x", padx=4, pady=(4, 6))
-        ttk.Button(controls, text="Normalizar", command=self._normalize_weights).pack(side="left")
+        ttk.Button(controls, text="Normalize", command=self._normalize_weights).pack(side="left")
 
     def _build_backbone(self) -> None:
         _clear_children(self.backbone_frame)
         ttk.Label(
             self.backbone_frame,
-            text="Selecciona el modelo que actuara como backbone principal",
+            text="Select the model that will act as the main backbone",
         ).pack(anchor="w", padx=4, pady=(4, 2))
 
         values = [f"[{idx}] {name}" for idx, name in enumerate(self.model_names)]
@@ -206,7 +206,7 @@ class LegacyConfigPanel(ttk.Frame):
         for col in range(total_columns + 1):
             self.block_table.columnconfigure(col, weight=0)
 
-        ttk.Label(self.block_table, text="Bloque", width=18).grid(row=0, column=0, padx=4, pady=2, sticky="w")
+        ttk.Label(self.block_table, text="Block", width=18).grid(row=0, column=0, padx=4, pady=2, sticky="w")
         for idx in range(len(self.model_names)):
             ttk.Label(self.block_table, text=f"M{idx}", width=8).grid(row=0, column=idx + 1, padx=4, pady=2)
 
@@ -245,7 +245,7 @@ class LegacyConfigPanel(ttk.Frame):
         for col in range(total_columns + 1):
             self.cross_table.columnconfigure(col, weight=0)
 
-        ttk.Label(self.cross_table, text="Bloque", width=18).grid(row=0, column=0, padx=4, pady=2, sticky="w")
+        ttk.Label(self.cross_table, text="Block", width=18).grid(row=0, column=0, padx=4, pady=2, sticky="w")
         for idx in range(len(self.model_names)):
             ttk.Label(self.cross_table, text=f"M{idx}", width=8).grid(row=0, column=idx + 1, padx=4, pady=2)
 
@@ -275,13 +275,13 @@ class LegacyConfigPanel(ttk.Frame):
 
     def _build_lora_table(self) -> None:
         _clear_children(self.lora_section)
-        ttk.Label(self.lora_section, text="Selecciona LoRAs opcionales para hornear").pack(
+        ttk.Label(self.lora_section, text="Select optional LoRAs to bake").pack(
             anchor="w", padx=4, pady=(4, 2)
         )
         self.lora_vars = []
 
         if not self.lora_paths:
-            ttk.Label(self.lora_section, text="No se encontraron archivos LoRA").pack(
+            ttk.Label(self.lora_section, text="No LoRA files found").pack(
                 anchor="w", padx=4, pady=(0, 4)
             )
             return
@@ -292,7 +292,7 @@ class LegacyConfigPanel(ttk.Frame):
             enabled = tk.BooleanVar(value=False)
             scale = tk.DoubleVar(value=1.0)
             ttk.Checkbutton(row, text=path.name, variable=enabled).pack(side="left", anchor="w")
-            ttk.Label(row, text="Escala").pack(side="left", padx=(6, 2))
+            ttk.Label(row, text="Scale").pack(side="left", padx=(6, 2))
             spin = ttk.Spinbox(
                 row,
                 from_=0.0,
@@ -379,7 +379,7 @@ class LegacyConfigPanel(ttk.Frame):
 
 
 class PerResConfigPanel(ttk.Frame):
-    """Panel de configuracion para el modo PerRes."""
+    """Configuration panel for PerRes mode."""
 
     def __init__(self, master: tk.Widget) -> None:
         super().__init__(master)
@@ -389,13 +389,13 @@ class PerResConfigPanel(ttk.Frame):
         self.lora_paths: List[Path] = []
         self.lora_vars: List[Dict[str, tk.Variable]] = []
 
-        self.assign_frame = ttk.LabelFrame(self, text="Asignacion por bloque")
+        self.assign_frame = ttk.LabelFrame(self, text="Block assignment")
         self.assign_frame.pack(fill="x", pady=4)
 
-        self.lock_frame = ttk.LabelFrame(self, text="Cross-attention locks (opcional)")
+        self.lock_frame = ttk.LabelFrame(self, text="Cross-attention locks (optional)")
         self.lock_frame.pack(fill="x", pady=4)
 
-        self.lora_section = ttk.LabelFrame(self, text="LoRA baking (opcional)")
+        self.lora_section = ttk.LabelFrame(self, text="LoRA baking (optional)")
         self.lora_section.pack(fill="x", pady=4)
 
     def refresh(
@@ -452,7 +452,7 @@ class PerResConfigPanel(ttk.Frame):
 
         ttk.Label(
             self.assign_frame,
-            text="Asigna cada bloque a un modelo (100% de contribucion)",
+            text="Assign each block to a model (100% contribution)",
         ).pack(anchor="w", padx=4, pady=(4, 2))
 
         options = [f"{idx} - {name}" for idx, name in enumerate(self.model_names)]
@@ -475,15 +475,15 @@ class PerResConfigPanel(ttk.Frame):
 
         ttk.Label(
             self.lock_frame,
-            text="Opcional: fija bloques de atencion cruzada a un modelo",
+            text="Optional: lock cross-attention blocks to a model",
         ).pack(anchor="w", padx=4, pady=(4, 2))
 
-        options = ["Ninguno"] + [f"{idx} - {name}" for idx, name in enumerate(self.model_names)]
+        options = ["None"] + [f"{idx} - {name}" for idx, name in enumerate(self.model_names)]
         for block in ATTN_BLOCKS:
             row = ttk.Frame(self.lock_frame)
             row.pack(fill="x", padx=4, pady=2)
             ttk.Label(row, text=block, width=18).pack(side="left")
-            var = tk.StringVar(value="Ninguno")
+            var = tk.StringVar(value="None")
             combo = ttk.Combobox(row, values=options, textvariable=var, state="readonly")
             combo.pack(side="left", padx=(4, 0))
             self.lock_vars[block] = var
@@ -500,7 +500,7 @@ class PerResConfigPanel(ttk.Frame):
         locks: Dict[str, int] = {}
         for block, var in self.lock_vars.items():
             raw = var.get()
-            if raw == "Ninguno":
+            if raw == "None":
                 continue
             try:
                 idx = int(raw.split("-", 1)[0].strip())
@@ -521,13 +521,13 @@ class PerResConfigPanel(ttk.Frame):
 
     def _build_lora_table(self) -> None:
         _clear_children(self.lora_section)
-        ttk.Label(self.lora_section, text="Selecciona LoRAs opcionales para hornear").pack(
+        ttk.Label(self.lora_section, text="Select optional LoRAs to bake").pack(
             anchor="w", padx=4, pady=(4, 2)
         )
         self.lora_vars = []
 
         if not self.lora_paths:
-            ttk.Label(self.lora_section, text="No se encontraron archivos LoRA").pack(
+            ttk.Label(self.lora_section, text="No LoRA files found").pack(
                 anchor="w", padx=4, pady=(0, 4)
             )
             return
@@ -538,7 +538,7 @@ class PerResConfigPanel(ttk.Frame):
             enabled = tk.BooleanVar(value=False)
             scale = tk.DoubleVar(value=1.0)
             ttk.Checkbutton(row, text=path.name, variable=enabled).pack(side="left", anchor="w")
-            ttk.Label(row, text="Escala").pack(side="left", padx=(6, 2))
+            ttk.Label(row, text="Scale").pack(side="left", padx=(6, 2))
             spin = ttk.Spinbox(
                 row,
                 from_=0.0,
@@ -553,7 +553,7 @@ class PerResConfigPanel(ttk.Frame):
 
 
 class HybridConfigPanel(ttk.Frame):
-    """Panel de configuracion para el modo Hybrid."""
+    """Configuration panel for Hybrid mode."""
 
     def __init__(self, master: tk.Widget) -> None:
         super().__init__(master)
@@ -563,13 +563,13 @@ class HybridConfigPanel(ttk.Frame):
         self.lora_paths: List[Path] = []
         self.lora_vars: List[Dict[str, tk.Variable]] = []
 
-        self.weights_frame = ttk.LabelFrame(self, text="Pesos por bloque")
+        self.weights_frame = ttk.LabelFrame(self, text="Per-block weights")
         self.weights_frame.pack(fill="x", pady=4)
 
-        self.lock_frame = ttk.LabelFrame(self, text="Cross-attention locks (opcional)")
+        self.lock_frame = ttk.LabelFrame(self, text="Cross-attention locks (optional)")
         self.lock_frame.pack(fill="x", pady=4)
 
-        self.lora_section = ttk.LabelFrame(self, text="LoRA baking (opcional)")
+        self.lora_section = ttk.LabelFrame(self, text="LoRA baking (optional)")
         self.lora_section.pack(fill="x", pady=4)
 
     def refresh(
@@ -631,10 +631,10 @@ class HybridConfigPanel(ttk.Frame):
         for col in range(total_columns + 1):
             self.weights_frame.columnconfigure(col, weight=0)
 
-        ttk.Label(self.weights_frame, text="Bloque", width=18).grid(row=0, column=0, padx=4, pady=2, sticky="w")
+        ttk.Label(self.weights_frame, text="Block", width=18).grid(row=0, column=0, padx=4, pady=2, sticky="w")
         for idx in range(len(self.model_names)):
             ttk.Label(self.weights_frame, text=f"M{idx}", width=8).grid(row=0, column=idx + 1, padx=4, pady=2)
-        ttk.Label(self.weights_frame, text="Acciones", width=10).grid(
+        ttk.Label(self.weights_frame, text="Actions", width=10).grid(
             row=0, column=len(self.model_names) + 1, padx=4, pady=2
         )
 
@@ -656,7 +656,7 @@ class HybridConfigPanel(ttk.Frame):
                 spin.grid(row=r, column=c + 1, padx=4, pady=2)
             ttk.Button(
                 self.weights_frame,
-                text="Normalizar",
+                text="Normalize",
                 command=lambda b=block: self._normalize_block(b),
             ).grid(row=r, column=len(self.model_names) + 1, padx=4, pady=2)
             self.weight_vars[block] = vars_row
@@ -670,15 +670,15 @@ class HybridConfigPanel(ttk.Frame):
 
         ttk.Label(
             self.lock_frame,
-            text="Opcional: fija bloques de atencion cruzada a un modelo",
+            text="Optional: lock cross-attention blocks to a model",
         ).pack(anchor="w", padx=4, pady=(4, 2))
 
-        options = ["Ninguno"] + [f"{idx} - {name}" for idx, name in enumerate(self.model_names)]
+        options = ["None"] + [f"{idx} - {name}" for idx, name in enumerate(self.model_names)]
         for block in ATTN_BLOCKS:
             row = ttk.Frame(self.lock_frame)
             row.pack(fill="x", padx=4, pady=2)
             ttk.Label(row, text=block, width=18).pack(side="left")
-            var = tk.StringVar(value="Ninguno")
+            var = tk.StringVar(value="None")
             combo = ttk.Combobox(row, values=options, textvariable=var, state="readonly")
             combo.pack(side="left", padx=(4, 0))
             self.lock_vars[block] = var
@@ -708,7 +708,7 @@ class HybridConfigPanel(ttk.Frame):
         locks: Dict[str, int] = {}
         for block, var in self.lock_vars.items():
             raw = var.get()
-            if raw == "Ninguno":
+            if raw == "None":
                 continue
             try:
                 idx = int(raw.split("-", 1)[0].strip())
@@ -729,13 +729,13 @@ class HybridConfigPanel(ttk.Frame):
 
     def _build_lora_table(self) -> None:
         _clear_children(self.lora_section)
-        ttk.Label(self.lora_section, text="Selecciona LoRAs opcionales para hornear").pack(
+        ttk.Label(self.lora_section, text="Select optional LoRAs to bake").pack(
             anchor="w", padx=4, pady=(4, 2)
         )
         self.lora_vars = []
 
         if not self.lora_paths:
-            ttk.Label(self.lora_section, text="No se encontraron archivos LoRA").pack(
+            ttk.Label(self.lora_section, text="No LoRA files found").pack(
                 anchor="w", padx=4, pady=(0, 4)
             )
             return
@@ -746,7 +746,7 @@ class HybridConfigPanel(ttk.Frame):
             enabled = tk.BooleanVar(value=False)
             scale = tk.DoubleVar(value=1.0)
             ttk.Checkbutton(row, text=path.name, variable=enabled).pack(side="left", anchor="w")
-            ttk.Label(row, text="Escala").pack(side="left", padx=(6, 2))
+            ttk.Label(row, text="Scale").pack(side="left", padx=(6, 2))
             spin = ttk.Spinbox(
                 row,
                 from_=0.0,
@@ -761,7 +761,7 @@ class HybridConfigPanel(ttk.Frame):
 
 
 class FusionGUI:
-    """Interfaz grafica principal de XLFusion V2.0."""
+    """Main graphical interface of XLFusion V2.0."""
 
     def __init__(
         self,
@@ -792,7 +792,7 @@ class FusionGUI:
 
         self.root = tk.Tk()
         version = load_config()["app"].get("version", "2.0")
-        self.root.title(f"XLFusion V{version} - Interfaz grafica")
+        self.root.title(f"XLFusion V{version} - Graphical Interface")
         self.root.geometry("980x720")
         self.root.minsize(840, 600)
 
@@ -812,10 +812,10 @@ class FusionGUI:
     def _build_layout(self) -> None:
         top = ttk.Frame(self.root)
         top.pack(fill="x", padx=12, pady=(12, 4))
-        ttk.Label(top, text="Asistente guiado", font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        ttk.Label(top, text="Guided Assistant", font=("Segoe UI", 14, "bold")).pack(anchor="w")
         ttk.Label(
             top,
-            text="Completa los pasos de izquierda a derecha para configurar y ejecutar una fusion.",
+            text="Complete the steps from left to right to configure and run a merge.",
         ).pack(anchor="w", pady=(2, 0))
 
         self.content_container = ttk.Frame(self.root)
@@ -858,12 +858,12 @@ class FusionGUI:
 
         nav = ttk.Frame(self.root)
         nav.pack(fill="x", padx=12, pady=(0, 12))
-        self.prev_btn = ttk.Button(nav, text="Atras", command=self._go_previous)
+        self.prev_btn = ttk.Button(nav, text="Back", command=self._go_previous)
         self.prev_btn.pack(side="left")
-        self.next_btn = ttk.Button(nav, text="Siguiente", command=self._go_next)
+        self.next_btn = ttk.Button(nav, text="Next", command=self._go_next)
         self.next_btn.pack(side="left", padx=(8, 0))
-        self.run_btn = ttk.Button(nav, text="Iniciar fusion", command=self._start_merge)
-        self.close_btn = ttk.Button(nav, text="Cerrar", command=self.root.destroy)
+        self.run_btn = ttk.Button(nav, text="Start Merge", command=self._start_merge)
+        self.close_btn = ttk.Button(nav, text="Close", command=self.root.destroy)
         self.close_btn.pack(side="right")
 
     # ------------------------------------------------------------------
@@ -871,10 +871,10 @@ class FusionGUI:
     # ------------------------------------------------------------------
     def _create_models_step(self, parent: ttk.Frame) -> ttk.Frame:
         frame = ttk.Frame(parent)
-        ttk.Label(frame, text="Paso 1: Biblioteca de modelos", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        ttk.Label(frame, text="Step 1: Model Library", font=("Segoe UI", 12, "bold")).pack(anchor="w")
         ttk.Label(
             frame,
-            text="Selecciona al menos dos checkpoints desde la carpeta models/.",
+            text="Select at least two checkpoints from the models/ folder.",
         ).pack(anchor="w", pady=(2, 8))
 
         table_frame = ttk.Frame(frame)
@@ -888,9 +888,9 @@ class FusionGUI:
             selectmode="extended",
             height=14,
         )
-        self.model_tree.heading("name", text="Modelo")
-        self.model_tree.heading("size", text="Tamano (MB)")
-        self.model_tree.heading("updated", text="Actualizado")
+        self.model_tree.heading("name", text="Model")
+        self.model_tree.heading("size", text="Size (MB)")
+        self.model_tree.heading("updated", text="Updated")
         self.model_tree.column("name", width=460, anchor="w")
         self.model_tree.column("size", width=110, anchor="center")
         self.model_tree.column("updated", width=180, anchor="center")
@@ -904,27 +904,27 @@ class FusionGUI:
 
         controls = ttk.Frame(frame)
         controls.pack(fill="x", pady=8)
-        ttk.Button(controls, text="Refrescar", command=self._populate_model_tree).pack(side="left")
-        ttk.Button(controls, text="Seleccion rapida (primeros dos)", command=self._quick_select_models).pack(
+        ttk.Button(controls, text="Refresh", command=self._populate_model_tree).pack(side="left")
+        ttk.Button(controls, text="Quick select (first two)", command=self._quick_select_models).pack(
             side="left", padx=(6, 0)
         )
 
-        self.model_summary = ttk.Label(frame, text="0 modelos seleccionados")
+        self.model_summary = ttk.Label(frame, text="0 models selected")
         self.model_summary.pack(anchor="w", pady=(4, 0))
         return frame
 
     def _create_mode_step(self, parent: ttk.Frame) -> ttk.Frame:
         frame = ttk.Frame(parent)
-        ttk.Label(frame, text="Paso 2: Seleccion de modo", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        ttk.Label(frame, text="Step 2: Mode Selection", font=("Segoe UI", 12, "bold")).pack(anchor="w")
         ttk.Label(
             frame,
-            text="Elige el modo de fusion que mejor se adapte al objetivo.",
+            text="Choose the merge mode that best fits your goal.",
         ).pack(anchor="w", pady=(2, 8))
 
         modes = [
-            ("legacy", "Legacy", "Mezcla ponderada clasica con controles por bloque y LoRA"),
-            ("perres", "PerRes", "Asignacion 100% por bloque de resolucion"),
-            ("hybrid", "Hybrid", "Combinacion de asignacion y pesos por bloque"),
+            ("legacy", "Legacy", "Classic weighted mix with per-block controls and LoRA"),
+            ("perres", "PerRes", "100% assignment per resolution block"),
+            ("hybrid", "Hybrid", "Combination of assignment and per-block weights"),
         ]
 
         for value, title, desc in modes:
@@ -942,8 +942,8 @@ class FusionGUI:
 
     def _create_config_step(self, parent: ttk.Frame) -> ttk.Frame:
         frame = ttk.Frame(parent)
-        ttk.Label(frame, text="Paso 3: Configuracion del modo", font=("Segoe UI", 12, "bold")).pack(anchor="w")
-        self.config_hint = ttk.Label(frame, text="Completa los parametros del modo seleccionado.")
+        ttk.Label(frame, text="Step 3: Mode Configuration", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        self.config_hint = ttk.Label(frame, text="Complete the parameters of the selected mode.")
         self.config_hint.pack(anchor="w", pady=(2, 8))
 
         self.config_container = ttk.Frame(frame)
@@ -959,10 +959,10 @@ class FusionGUI:
 
     def _create_preview_step(self, parent: ttk.Frame) -> ttk.Frame:
         frame = ttk.Frame(parent)
-        ttk.Label(frame, text="Paso 4: Vista previa", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        ttk.Label(frame, text="Step 4: Preview", font=("Segoe UI", 12, "bold")).pack(anchor="w")
         ttk.Label(
             frame,
-            text="Revisa la distribucion de bloques antes de ejecutar la fusion.",
+            text="Review the block distribution before running the merge.",
         ).pack(anchor="w", pady=(2, 8))
 
         preview_top = ttk.Frame(frame)
@@ -979,8 +979,8 @@ class FusionGUI:
             show="headings",
             height=8,
         )
-        self.preview_table.heading("block", text="Bloque")
-        self.preview_table.heading("detalle", text="Configuracion")
+        self.preview_table.heading("block", text="Block")
+        self.preview_table.heading("detalle", text="Configuration")
         self.preview_table.column("block", width=160, anchor="w")
         self.preview_table.column("detalle", width=600, anchor="w")
         self.preview_table.pack(fill="both", expand=True)
@@ -989,19 +989,19 @@ class FusionGUI:
 
     def _create_run_step(self, parent: ttk.Frame) -> ttk.Frame:
         frame = ttk.Frame(parent)
-        ttk.Label(frame, text="Paso 5: Ejecutar fusion", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        ttk.Label(frame, text="Step 5: Run Merge", font=("Segoe UI", 12, "bold")).pack(anchor="w")
         ttk.Label(
             frame,
-            text="Lanza la fusion y monitoriza el progreso en tiempo real.",
+            text="Start the merge and monitor progress in real time.",
         ).pack(anchor="w", pady=(2, 8))
 
-        self.run_summary = ttk.Label(frame, text="Listo para ejecutar")
+        self.run_summary = ttk.Label(frame, text="Ready to run")
         self.run_summary.pack(anchor="w", pady=(4, 8))
 
         self.progress = ttk.Progressbar(frame, mode="determinate")
         actions = ttk.Frame(frame)
         actions.pack(fill="x", pady=(0, 8))
-        self.cancel_btn = ttk.Button(actions, text="Cancelar", command=self._cancel_running, state="disabled")
+        self.cancel_btn = ttk.Button(actions, text="Cancel", command=self._cancel_running, state="disabled")
         self.cancel_btn.pack(side="left")
 
         self.log_text = tk.Text(frame, height=14, state="disabled", wrap="word")
@@ -1041,13 +1041,13 @@ class FusionGUI:
     def _update_model_selection(self) -> None:
         selected = [int(iid) for iid in self.model_tree.selection()]
         if not selected:
-            self.model_summary.config(text="0 modelos seleccionados")
+            self.model_summary.config(text="0 models selected")
             return
         names = [self.model_paths[i].name for i in selected]
         preview = ", ".join(names[:3])
         if len(names) > 3:
             preview += " ..."
-        self.model_summary.config(text=f"{len(names)} modelos: {preview}")
+        self.model_summary.config(text=f"{len(names)} models: {preview}")
 
     def _quick_select_models(self) -> None:
         self.model_tree.selection_remove(self.model_tree.selection())
@@ -1122,7 +1122,7 @@ class FusionGUI:
         if index == 0:
             selected_ids = [int(iid) for iid in self.model_tree.selection()]
             if len(selected_ids) < 2:
-                messagebox.showwarning("Seleccion insuficiente", "Selecciona al menos dos modelos.")
+                messagebox.showwarning("Insufficient selection", "Select at least two models.")
                 return False
             selected_ids.sort()
             self.state["model_indices"] = selected_ids
@@ -1139,17 +1139,17 @@ class FusionGUI:
             mode: str = self.state.get("mode", "legacy")
             model_count = len(self.state.get("model_indices", []))
             if model_count < 2:
-                messagebox.showwarning("Configuracion incompleta", "Selecciona modelos antes de configurar.")
+                messagebox.showwarning("Incomplete configuration", "Select models before configuring.")
                 return False
 
             if mode == "legacy":
                 config = self.legacy_panel.get_config()
                 if len(config["weights"]) != model_count or sum(config["weights"]) <= 0:
-                    messagebox.showwarning("Pesos invalidos", "Introduce pesos validos para todos los modelos.")
+                    messagebox.showwarning("Invalid weights", "Enter valid weights for all models.")
                     return False
                 backbone = config["backbone_idx"]
                 if backbone < 0 or backbone >= model_count:
-                    messagebox.showwarning("Backbone invalido", "Selecciona un backbone valido.")
+                    messagebox.showwarning("Invalid backbone", "Select a valid backbone.")
                     return False
                 self.state["legacy"] = config
                 return True
@@ -1158,10 +1158,10 @@ class FusionGUI:
                 config = self.perres_panel.get_config()
                 assignments = config.get("assignments", {})
                 if set(assignments.keys()) != set(BLOCK_GROUPS):
-                    messagebox.showwarning("Bloques incompletos", "Asigna todos los bloques de resolucion.")
+                    messagebox.showwarning("Incomplete blocks", "Assign all resolution blocks.")
                     return False
                 if any(idx < 0 or idx >= model_count for idx in assignments.values()):
-                    messagebox.showwarning("Asignacion invalida", "Indice de modelo fuera de rango.")
+                    messagebox.showwarning("Invalid assignment", "Model index out of range.")
                     return False
                 self.state["perres"] = config
                 return True
@@ -1170,7 +1170,7 @@ class FusionGUI:
                 config = self.hybrid_panel.get_config()
                 hybrid_cfg = config.get("hybrid_config", {})
                 if set(hybrid_cfg.keys()) != set(BLOCK_GROUPS):
-                    messagebox.showwarning("Bloques incompletos", "Configura todos los bloques.")
+                    messagebox.showwarning("Incomplete blocks", "Configure all blocks.")
                     return False
                 self.state["hybrid"] = config
                 return True
@@ -1185,17 +1185,17 @@ class FusionGUI:
             panel.pack_forget()
 
         if mode == "legacy":
-            self.config_hint.config(text="Define pesos, backbone y opciones avanzadas.")
+            self.config_hint.config(text="Define weights, backbone and advanced options.")
             existing = self.state.get("legacy")
             self.legacy_panel.refresh(model_names, self.lora_paths, existing)
             self.legacy_panel.pack(fill="both", expand=True)
         elif mode == "perres":
-            self.config_hint.config(text="Asigna cada bloque de resolucion a un modelo.")
+            self.config_hint.config(text="Assign each resolution block to a model.")
             existing = self.state.get("perres")
             self.perres_panel.refresh(model_names, self.lora_paths, existing)
             self.perres_panel.pack(fill="both", expand=True)
         else:
-            self.config_hint.config(text="Configura pesos personalizados por bloque.")
+            self.config_hint.config(text="Configure custom per-block weights.")
             existing = self.state.get("hybrid")
             self.hybrid_panel.refresh(model_names, self.lora_paths, existing)
             self.hybrid_panel.pack(fill="both", expand=True)
@@ -1252,13 +1252,13 @@ class FusionGUI:
                 anchor="n",
             )
 
-            summary = ", ".join(summary_parts) if summary_parts else "Sin datos"
+            summary = ", ".join(summary_parts) if summary_parts else "No data"
             self.preview_table.insert("", "end", values=(block, summary))
 
     def _update_run_summary(self) -> None:
         model_names = ", ".join(self.state.get("model_names", []))
         mode = self.state.get("mode", "legacy")
-        self.run_summary.config(text=f"Modo: {mode} | Modelos: {model_names}")
+        self.run_summary.config(text=f"Mode: {mode} | Models: {model_names}")
 
     # ------------------------------------------------------------------
     # Merge execution
@@ -1268,7 +1268,7 @@ class FusionGUI:
             return
         mode = self.state.get("mode")
         if not mode:
-            messagebox.showwarning("Configuracion incompleta", "Selecciona un modo valido.")
+            messagebox.showwarning("Incomplete configuration", "Select a valid mode.")
             return
 
         self.log_text.configure(state="normal")
@@ -1295,9 +1295,9 @@ class FusionGUI:
             mode: str = self.state.get("mode", "legacy")
 
             if len(model_paths) < 2:
-                raise RuntimeError("Se requieren al menos dos modelos para fusionar.")
+                raise RuntimeError("At least two models are required to merge.")
 
-            self.log_queue.put(("info", f"Modelos seleccionados: {', '.join(model_names)}"))
+            self.log_queue.put(("info", f"Selected models: {', '.join(model_names)}"))
 
             def on_progress(kind: str, value: int) -> None:
                 if kind == "total":
@@ -1406,8 +1406,8 @@ class FusionGUI:
                 lora_paths=lora_paths,
             )
 
-            self.log_queue.put(("success", f"Fusion completada: {output_path.name} (V{version})"))
-            self.log_queue.put(("info", f"Metadata guardada en {metadata_folder.name}"))
+            self.log_queue.put(("success", f"Merge completed: {output_path.name} (V{version})"))
+            self.log_queue.put(("info", f"Metadata saved to {metadata_folder.name}"))
         except Exception as exc:  # pragma: no cover
             self.log_queue.put(("error", str(exc)))
         finally:
@@ -1421,10 +1421,10 @@ class FusionGUI:
                     self._append_log(message)
                 elif level == "success":
                     self._append_log(message)
-                    messagebox.showinfo("Fusion completada", message)
+                    messagebox.showinfo("Merge completed", message)
                 elif level == "error":
                     self._append_log(f"ERROR: {message}")
-                    messagebox.showerror("Error en fusion", message)
+                    messagebox.showerror("Merge error", message)
                 elif level == "progress_total":
                     try:
                         total = int(message)
@@ -1463,7 +1463,7 @@ class FusionGUI:
     def _cancel_running(self) -> None:
         if getattr(self, 'cancel_event', None) is not None:
             self.cancel_event.set()
-            self._append_log("Cancelacion solicitada por el usuario...")
+            self._append_log("Cancellation requested by user...")
 
 
 def launch_gui(root_dir: Path) -> None:

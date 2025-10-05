@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Utilidad para compilar la GUI en un ejecutable de Windows mediante PyInstaller."""
+"""Utility to build the GUI into a Windows executable using PyInstaller."""
 from __future__ import annotations
 
 import argparse
@@ -9,12 +9,12 @@ from pathlib import Path
 try:
     import PyInstaller.__main__  # type: ignore
 except ImportError as exc:  # pragma: no cover
-    print("PyInstaller no esta instalado. Ejecuta 'pip install pyinstaller' y vuelve a intentarlo.")
+    print("PyInstaller is not installed. Run 'pip install pyinstaller' and try again.")
     sys.exit(1)
 
 
 def _format_add_data(src: Path, dest: str) -> str:
-    """Formatea la opcion --add-data respetando diferencias de plataforma."""
+    """Format the --add-data option respecting platform differences."""
     separator = ";" if sys.platform.startswith("win") else ":"
     return f"{src}{separator}{dest}"
 
@@ -23,7 +23,7 @@ def build(name: str, onefile: bool) -> None:
     root = Path(__file__).resolve().parents[1]
     gui_entry = root / "gui_app.py"
     if not gui_entry.exists():
-        raise FileNotFoundError("No se encontro gui_app.py en la raiz del proyecto")
+        raise FileNotFoundError("gui_app.py not found at the project root")
 
     assets = [
         _format_add_data(root / "config.yaml", "."),
@@ -50,12 +50,12 @@ def build(name: str, onefile: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compila la GUI con PyInstaller")
-    parser.add_argument("--name", default="XLFusionGUI", help="Nombre del ejecutable resultante")
+    parser = argparse.ArgumentParser(description="Build the GUI with PyInstaller")
+    parser.add_argument("--name", default="XLFusionGUI", help="Name of the resulting executable")
     parser.add_argument(
         "--onefile",
         action="store_true",
-        help="Genera un ejecutable unico (--onefile)",
+        help="Generate a single-file executable (--onefile)",
     )
     opts = parser.parse_args()
     build(opts.name, opts.onefile)

@@ -24,7 +24,7 @@ from .memory import estimate_memory_requirement, check_memory_availability
 
 
 class MergeCancelled(Exception):
-    """Señal para cancelar un proceso de fusión en curso"""
+    """Signal to cancel an ongoing merge process"""
     pass
 
 
@@ -196,7 +196,7 @@ def merge_hybrid(
                 except Exception:
                     pass
             if cancel_event and (processed % max(1, cancel_every) == 0) and cancel_event.is_set():
-                raise MergeCancelled("Fusión cancelada por el usuario")
+                raise MergeCancelled("Merge cancelled by the user")
 
         for key in tqdm(base_keys, desc="Hybrid merge", unit="tensor"):
             if not key.startswith(UNET_PREFIX):
@@ -324,7 +324,7 @@ def merge_perres(
                 except Exception:
                     pass
             if cancel_event and (processed % max(1, cancel_every) == 0) and cancel_event.is_set():
-                raise MergeCancelled("Fusión cancelada por el usuario")
+                raise MergeCancelled("Merge cancelled by the user")
 
         for key in tqdm(base_keys, desc="PerRes merge", unit="tensor"):
             if not key.startswith(UNET_PREFIX):
@@ -494,7 +494,7 @@ def stream_weighted_merge_from_paths(
             process_key(key)
             processed += 1
             if cancel_event and (processed % max(1, cancel_every) == 0) and cancel_event.is_set():
-                raise MergeCancelled("Fusión cancelada por el usuario")
+                raise MergeCancelled("Merge cancelled by the user")
             seen.add(key)
 
         # Include keys that exist only in non-base models

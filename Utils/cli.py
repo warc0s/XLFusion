@@ -73,25 +73,25 @@ def pick_backbone(names: List[str], weights: Optional[List[float]] = None) -> in
 
 def prompt_block_merge(names: List[str]) -> Optional[List[Dict[str, float]]]:
     """
-    Solicita multiplicadores por bloque y por modelo para el modo Legacy.
+    Ask for per-block multipliers per model for Legacy mode.
 
-    Soporta N modelos. Para cada bloque (down_0_1, down_2_3, mid, up_0_1, up_2_3)
-    se piden pesos para cada modelo como pares idx:peso separados por coma.
-    Si se deja vacío, se salta la configuración por bloques.
+    Supports N models. For each block (down_0_1, down_2_3, mid, up_0_1, up_2_3)
+    request weights per model as comma-separated pairs idx:weight.
+    If left empty, per-block configuration is skipped.
 
-    Devuelve una lista de longitud N donde cada elemento es un diccionario
-    {block_name -> multiplier} para ese modelo.
+    Returns a list of length N where each element is a dict
+    {block_name -> multiplier} for that model.
     """
-    print("\nMultiplicadores por bloque (opcional):")
-    print("Para cada bloque, introduce pesos por modelo en formato 0:1.0,1:0.5,2:0.0")
-    print("Bloques disponibles: down_0_1, down_2_3, mid, up_0_1, up_2_3")
+    print("\nPer-block multipliers (optional):")
+    print("For each block, enter per-model weights like 0:1.0,1:0.5,2:0.0")
+    print("Available blocks: down_0_1, down_2_3, mid, up_0_1, up_2_3")
 
     blocks = ['down_0_1', 'down_2_3', 'mid', 'up_0_1', 'up_2_3']
     per_model: List[Dict[str, float]] = [{ } for _ in names]
 
     any_set = False
     for block in blocks:
-        raw = input(f"Pesos para {block} (e.g., 0:1.0,1:0.5) [ENTER para omitir]: ").strip()
+        raw = input(f"Weights for {block} (e.g., 0:1.0,1:0.5) [Press ENTER to skip]: ").strip()
         if not raw:
             continue
         any_set = True
@@ -112,17 +112,17 @@ def prompt_block_merge(names: List[str]) -> Optional[List[Dict[str, float]]]:
 
 def prompt_crossattn_boost(names: List[str]) -> Optional[List[Dict[str, float]]]:
     """
-    Solicita boosts para cross-attention por bloque grueso (down/mid/up) y por modelo.
-    Soporta N modelos. Devuelve lista de longitud N con {block -> boost} por modelo.
+    Ask for cross-attention boosts per coarse block (down/mid/up) and per model.
+    Supports N models. Returns a list of length N with {block -> boost} per model.
     """
-    print("\nCross-attention boost (opcional):")
-    print("Para cada bloque (down, mid, up), introduce pares idx:boost (e.g., 0:1.0,1:0.8)")
+    print("\nCross-attention boost (optional):")
+    print("For each block (down, mid, up), enter idx:boost pairs (e.g., 0:1.0,1:0.8)")
 
     blocks = ['down', 'mid', 'up']
     per_model: List[Dict[str, float]] = [{ } for _ in names]
     any_set = False
     for block in blocks:
-        raw = input(f"Boosts para {block} [ENTER para omitir]: ").strip()
+        raw = input(f"Boosts for {block} [Press ENTER to skip]: ").strip()
         if not raw:
             continue
         any_set = True
