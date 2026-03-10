@@ -39,6 +39,7 @@ from .lora import (
 from .memory import (
     estimate_memory_requirement,
     check_memory_availability,
+    get_available_memory_gb,
     load_state_with_fallback,
     load_state,
     save_state,
@@ -55,6 +56,19 @@ from .cli import (
     prompt_loras,
     prompt_hybrid_config,
     prompt_perres_assignments
+)
+
+# Validation utilities
+from .validation import (
+    BLOCK_GROUPS,
+    ATTN_BLOCKS,
+    ValidationIssue,
+    PreflightPlan,
+    ValidationResult,
+    validate_merge_request,
+    format_preflight_plan,
+    export_preflight_plan,
+    preflight_to_dict,
 )
 
 # Analyzer (optional)
@@ -104,13 +118,18 @@ __all__ = [
     'CROSS_TOKENS', 'CROSS_PROJ',
     
     # Memory
-    'estimate_memory_requirement', 'check_memory_availability', 
+    'estimate_memory_requirement', 'check_memory_availability', 'get_available_memory_gb',
     'load_state_with_fallback', 'load_state', 'save_state', 'PSUTIL_AVAILABLE',
     
     # CLI
     'prompt_select', 'prompt_weights', 'pick_backbone', 'prompt_block_merge',
     'prompt_crossattn_boost', 'prompt_loras', 'prompt_hybrid_config', 
     'prompt_perres_assignments',
+
+    # Validation
+    'BLOCK_GROUPS', 'ATTN_BLOCKS', 'ValidationIssue', 'PreflightPlan',
+    'ValidationResult', 'validate_merge_request', 'format_preflight_plan',
+    'export_preflight_plan', 'preflight_to_dict',
     
     # Analyzer
     'ANALYZER_AVAILABLE', 'ModelDiffAnalyzer', 'CompatibilityAnalyzer',

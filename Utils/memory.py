@@ -1,6 +1,5 @@
 """
-Memory management utilities for XLFusion
-Handles memory estimation, state loading/saving, and system checks
+Memory management utilities for XLFusion.
 """
 import gc
 import time
@@ -29,6 +28,13 @@ def check_memory_availability(required_gb: float) -> bool:
         return True  # Can't check, assume OK
     available = psutil.virtual_memory().available / (1024**3)
     return available > (required_gb * 1.5)  # 50% safety margin
+
+
+def get_available_memory_gb() -> float | None:
+    """Return currently available system memory in GB when psutil is available."""
+    if not PSUTIL_AVAILABLE:
+        return None
+    return psutil.virtual_memory().available / (1024**3)
 
 
 def load_state_with_fallback(path: Path, max_retries: int = 3) -> Dict[str, torch.Tensor]:

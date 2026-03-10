@@ -1,10 +1,9 @@
-# XLFusion V2.0 Configuration
+# XLFusion V2.1 Configuration
 # =====================================
 # Centralized configuration for XLFusion checkpoint merger
 # This file controls all aspects of model merging behavior, naming, and output
-# V1.1 adds Hybrid mode combining PerRes assignment with weighted blending
-# V1.2 adds Batch Processing mode for automated multi-model fusion workflows
-# V2.0 adds the graphical user interface and Windows executable support
+# Current release includes CLI, GUI, batch processing, shared validation,
+# preflight planning, and reproducible metadata.
 
 
 # =====================================
@@ -102,5 +101,5 @@ app:
   tool_name: "XLFusion"
 
   # Application version - recorded in metadata for merge reproducibility
-  # Format: "major.minor" (e.g., "1.0", "1.1", "2.0")
-  version: "2.0"
+  # Format: "major.minor" (e.g., "1.0", "1.1", "2.1")
+  version: "2.1"

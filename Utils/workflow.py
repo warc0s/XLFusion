@@ -63,7 +63,7 @@ def save_merge_results(
     yaml_kwargs = yaml_kwargs or {}
 
     output_path, version = next_version_path(output_dir)
-    config = load_config()
+    config = load_config(root=output_dir.parent, reporter=None)
 
     meta = {
         "models": ",".join(model_names),

@@ -7,12 +7,13 @@ from queue import Empty, Queue
 from typing import Dict, List, Optional
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import filedialog, ttk, messagebox
 
 from Utils.config import ensure_dirs, list_safetensors, load_config
 from Utils.merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
 from Utils.lora import apply_single_lora
 from Utils.workflow import save_merge_results
+from Utils.validation import export_preflight_plan, format_preflight_plan, validate_merge_request
 
 BLOCK_GROUPS = ["down_0_1", "down_2_3", "mid", "up_0_1", "up_2_3"]
 ATTN_BLOCKS = ["down", "mid", "up"]
@@ -761,7 +762,7 @@ class HybridConfigPanel(ttk.Frame):
 
 
 class FusionGUI:
-    """Main graphical interface of XLFusion V2.0."""
+    """Main graphical interface of XLFusion V2.1."""
 
     def __init__(
         self,
@@ -985,6 +986,19 @@ class FusionGUI:
         self.preview_table.column("detalle", width=600, anchor="w")
         self.preview_table.pack(fill="both", expand=True)
 
+        preflight_actions = ttk.Frame(frame)
+        preflight_actions.pack(fill="x", pady=(8, 4))
+        ttk.Label(preflight_actions, text="Fusion plan").pack(side="left")
+        ttk.Button(preflight_actions, text="Export TXT", command=lambda: self._export_preflight("txt")).pack(
+            side="right", padx=(4, 0)
+        )
+        ttk.Button(preflight_actions, text="Export JSON", command=lambda: self._export_preflight("json")).pack(
+            side="right"
+        )
+
+        self.preflight_text = tk.Text(frame, height=12, state="disabled", wrap="word")
+        self.preflight_text.pack(fill="both", expand=True)
+
         return frame
 
     def _create_run_step(self, parent: ttk.Frame) -> ttk.Frame:
@@ -1118,6 +1132,77 @@ class FusionGUI:
     # ------------------------------------------------------------------
     # Step validation and preparation
     # ------------------------------------------------------------------
+    def _build_validation(self):
+        mode: str = self.state.get("mode", "legacy")
+        model_paths: List[Path] = list(self.state.get("model_paths", []))
+
+        if mode == "legacy":
+            config = self.legacy_panel.get_config()
+            self.state["legacy"] = config
+            return validate_merge_request(
+                mode=mode,
+                model_paths=model_paths,
+                backbone=config.get("backbone_idx", 0),
+                weights=config.get("weights"),
+                block_multipliers=config.get("block_multipliers"),
+                crossattn_boosts=config.get("crossattn_boosts"),
+                loras=config.get("loras"),
+                loras_dir=self.loras_dir,
+            )
+
+        if mode == "perres":
+            config = self.perres_panel.get_config()
+            self.state["perres"] = config
+            assignments = config.get("assignments", {})
+            backbone_idx = list(assignments.values())[0] if assignments else 0
+            return validate_merge_request(
+                mode=mode,
+                model_paths=model_paths,
+                backbone=backbone_idx,
+                assignments=assignments,
+                attn2_locks=config.get("attn2_locks"),
+                loras=config.get("loras"),
+                loras_dir=self.loras_dir,
+            )
+
+        config = self.hybrid_panel.get_config()
+        self.state["hybrid"] = config
+        return validate_merge_request(
+            mode=mode,
+            model_paths=model_paths,
+            backbone=0,
+            hybrid_config=config.get("hybrid_config"),
+            attn2_locks=config.get("attn2_locks"),
+            loras=config.get("loras"),
+            loras_dir=self.loras_dir,
+        )
+
+    def _set_preflight_text(self, content: str) -> None:
+        self.preflight_text.configure(state="normal")
+        self.preflight_text.delete("1.0", "end")
+        self.preflight_text.insert("1.0", content)
+        self.preflight_text.configure(state="disabled")
+
+    def _export_preflight(self, fmt: str) -> None:
+        plan = self.state.get("preflight")
+        if not plan:
+            messagebox.showwarning("No preflight", "Validate the configuration first to generate a fusion plan.")
+            return
+
+        filetypes = [("Text files", "*.txt")] if fmt == "txt" else [("JSON files", "*.json")]
+        suffix = ".txt" if fmt == "txt" else ".json"
+        path = filedialog.asksaveasfilename(
+            title="Export fusion plan",
+            defaultextension=suffix,
+            filetypes=filetypes,
+            initialdir=str(self.output_dir),
+        )
+        if not path:
+            return
+
+        export_preflight_plan(plan, Path(path))
+        messagebox.showinfo("Exported", f"Fusion plan exported to:\n{path}")
+
     def _validate_step(self, index: int) -> bool:
         if index == 0:
             selected_ids = [int(iid) for iid in self.model_tree.selection()]
@@ -1136,44 +1221,17 @@ class FusionGUI:
             return True
 
         if index == 2:
-            mode: str = self.state.get("mode", "legacy")
-            model_count = len(self.state.get("model_indices", []))
-            if model_count < 2:
+            if len(self.state.get("model_indices", [])) < 2:
                 messagebox.showwarning("Incomplete configuration", "Select models before configuring.")
                 return False
-
-            if mode == "legacy":
-                config = self.legacy_panel.get_config()
-                if len(config["weights"]) != model_count or sum(config["weights"]) <= 0:
-                    messagebox.showwarning("Invalid weights", "Enter valid weights for all models.")
-                    return False
-                backbone = config["backbone_idx"]
-                if backbone < 0 or backbone >= model_count:
-                    messagebox.showwarning("Invalid backbone", "Select a valid backbone.")
-                    return False
-                self.state["legacy"] = config
-                return True
-
-            if mode == "perres":
-                config = self.perres_panel.get_config()
-                assignments = config.get("assignments", {})
-                if set(assignments.keys()) != set(BLOCK_GROUPS):
-                    messagebox.showwarning("Incomplete blocks", "Assign all resolution blocks.")
-                    return False
-                if any(idx < 0 or idx >= model_count for idx in assignments.values()):
-                    messagebox.showwarning("Invalid assignment", "Model index out of range.")
-                    return False
-                self.state["perres"] = config
-                return True
-
-            if mode == "hybrid":
-                config = self.hybrid_panel.get_config()
-                hybrid_cfg = config.get("hybrid_config", {})
-                if set(hybrid_cfg.keys()) != set(BLOCK_GROUPS):
-                    messagebox.showwarning("Incomplete blocks", "Configure all blocks.")
-                    return False
-                self.state["hybrid"] = config
-                return True
+            validation = self._build_validation()
+            if not validation.valid:
+                details = "\n".join(f"- {item.field}: {item.message}" for item in validation.errors)
+                messagebox.showwarning("Invalid configuration", details)
+                return False
+            self.state["validation"] = validation
+            self.state["preflight"] = validation.preflight
+            return True
 
         return True
 
@@ -1255,7 +1313,24 @@ class FusionGUI:
             summary = ", ".join(summary_parts) if summary_parts else "No data"
             self.preview_table.insert("", "end", values=(block, summary))
 
+        validation = self.state.get("validation")
+        if validation and validation.preflight:
+            self.state["preflight"] = validation.preflight
+            self._set_preflight_text(format_preflight_plan(validation.preflight))
+        else:
+            self._set_preflight_text("Complete the configuration to generate the fusion plan.")
+
     def _update_run_summary(self) -> None:
+        plan = self.state.get("preflight")
+        if plan:
+            self.run_summary.config(
+                text=(
+                    f"Mode: {plan.mode} | Backbone: {plan.backbone_name} | "
+                    f"Models used: {', '.join(plan.selected_models)} | "
+                    f"Estimated memory: {plan.estimated_memory_gb:.2f} GB"
+                )
+            )
+            return
         model_names = ", ".join(self.state.get("model_names", []))
         mode = self.state.get("mode", "legacy")
         self.run_summary.config(text=f"Mode: {mode} | Models: {model_names}")
@@ -1270,6 +1345,15 @@ class FusionGUI:
         if not mode:
             messagebox.showwarning("Incomplete configuration", "Select a valid mode.")
             return
+        validation = self._build_validation()
+        if not validation.valid:
+            details = "\n".join(f"- {item.field}: {item.message}" for item in validation.errors)
+            messagebox.showwarning("Invalid configuration", details)
+            return
+        self.state["validation"] = validation
+        self.state["preflight"] = validation.preflight
+        self._update_run_summary()
+        self._set_preflight_text(format_preflight_plan(validation.preflight))
 
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
@@ -1290,8 +1374,12 @@ class FusionGUI:
 
     def _merge_worker(self) -> None:
         try:
-            model_paths: List[Path] = list(self.state.get("model_paths", []))
-            model_names: List[str] = list(self.state.get("model_names", []))
+            validation = self.state.get("validation")
+            if validation is None or not validation.valid:
+                raise RuntimeError("Validated configuration is not available.")
+
+            model_paths: List[Path] = list(validation.normalized.get("model_paths", []))
+            model_names: List[str] = list(validation.normalized.get("model_names", []))
             mode: str = self.state.get("mode", "legacy")
 
             if len(model_paths) < 2:
@@ -1306,11 +1394,10 @@ class FusionGUI:
                     self.log_queue.put(("progress_tick", value))
 
             if mode == "legacy":
-                config = self.state.get("legacy", {})
-                weights = config.get("weights", [])
-                backbone_idx = int(config.get("backbone_idx", 0))
-                block_multipliers = config.get("block_multipliers")
-                cross_boosts = config.get("crossattn_boosts")
+                weights = validation.normalized.get("weights", [])
+                backbone_idx = int(validation.normalized.get("backbone_idx", 0))
+                block_multipliers = validation.normalized.get("block_multipliers")
+                cross_boosts = validation.normalized.get("crossattn_boosts")
                 merged, _stats = stream_weighted_merge_from_paths(
                     model_paths,
                     weights,
@@ -1321,9 +1408,9 @@ class FusionGUI:
                     progress_cb=on_progress,
                     cancel_event=self.cancel_event,
                 )
-                for lora_path, scale in config.get("loras", []):
-                    applied, skipped = apply_single_lora(merged, lora_path, scale)
-                    self.log_queue.put(("info", f"LoRA {lora_path.name}: applied {applied}, skipped {skipped}"))
+                for lora_spec in validation.normalized.get("loras", []):
+                    applied, skipped = apply_single_lora(merged, lora_spec["path"], lora_spec["scale"])
+                    self.log_queue.put(("info", f"LoRA {lora_spec['file']}: applied {applied}, skipped {skipped}"))
 
                 yaml_kwargs: Dict[str, object] = {"weights": weights}
                 if block_multipliers:
@@ -1331,16 +1418,15 @@ class FusionGUI:
                 if cross_boosts:
                     yaml_kwargs["crossattn_boosts"] = cross_boosts
                 lora_yaml = []
-                for lora_path, scale in config.get("loras", []):
-                    lora_yaml.append({"file": lora_path.name, "scale": scale})
+                for lora_spec in validation.normalized.get("loras", []):
+                    lora_yaml.append({"file": lora_spec["file"], "scale": lora_spec["scale"]})
                 if lora_yaml:
                     yaml_kwargs["loras"] = lora_yaml
 
             elif mode == "perres":
-                config = self.state.get("perres", {})
-                assignments = config.get("assignments", {})
-                attn2 = config.get("attn2_locks")
-                backbone_idx = list(assignments.values())[0]
+                assignments = validation.normalized.get("assignments", {})
+                attn2 = validation.normalized.get("attn2_locks")
+                backbone_idx = int(validation.normalized.get("backbone_idx", 0))
                 merged = merge_perres(
                     model_paths,
                     assignments,
@@ -1350,25 +1436,23 @@ class FusionGUI:
                     cancel_event=self.cancel_event,
                 )
 
-                # Aplicar LoRAs si hay
-                for lora_path, scale in config.get("loras", []):
-                    applied, skipped = apply_single_lora(merged, lora_path, scale)
-                    self.log_queue.put(("info", f"LoRA {lora_path.name}: applied {applied}, skipped {skipped}"))
+                for lora_spec in validation.normalized.get("loras", []):
+                    applied, skipped = apply_single_lora(merged, lora_spec["path"], lora_spec["scale"])
+                    self.log_queue.put(("info", f"LoRA {lora_spec['file']}: applied {applied}, skipped {skipped}"))
 
                 yaml_kwargs = {"assignments": assignments}
                 if attn2:
                     yaml_kwargs["attn2_locks"] = attn2
                 lora_yaml = []
-                for lora_path, scale in config.get("loras", []):
-                    lora_yaml.append({"file": lora_path.name, "scale": scale})
+                for lora_spec in validation.normalized.get("loras", []):
+                    lora_yaml.append({"file": lora_spec["file"], "scale": lora_spec["scale"]})
                 if lora_yaml:
                     yaml_kwargs["loras"] = lora_yaml
 
             else:
-                config = self.state.get("hybrid", {})
-                hybrid_cfg = config.get("hybrid_config", {})
-                attn2 = config.get("attn2_locks")
-                backbone_idx = 0
+                hybrid_cfg = validation.normalized.get("hybrid_config", {})
+                attn2 = validation.normalized.get("attn2_locks")
+                backbone_idx = int(validation.normalized.get("backbone_idx", 0))
                 merged = merge_hybrid(
                     model_paths,
                     hybrid_cfg,
@@ -1378,22 +1462,20 @@ class FusionGUI:
                     cancel_event=self.cancel_event,
                 )
 
-                # Aplicar LoRAs si hay
-                for lora_path, scale in config.get("loras", []):
-                    applied, skipped = apply_single_lora(merged, lora_path, scale)
-                    self.log_queue.put(("info", f"LoRA {lora_path.name}: applied {applied}, skipped {skipped}"))
+                for lora_spec in validation.normalized.get("loras", []):
+                    applied, skipped = apply_single_lora(merged, lora_spec["path"], lora_spec["scale"])
+                    self.log_queue.put(("info", f"LoRA {lora_spec['file']}: applied {applied}, skipped {skipped}"))
 
                 yaml_kwargs = {"hybrid_config": hybrid_cfg}
                 if attn2:
                     yaml_kwargs["attn2_locks"] = attn2
                 lora_yaml = []
-                for lora_path, scale in config.get("loras", []):
-                    lora_yaml.append({"file": lora_path.name, "scale": scale})
+                for lora_spec in validation.normalized.get("loras", []):
+                    lora_yaml.append({"file": lora_spec["file"], "scale": lora_spec["scale"]})
                 if lora_yaml:
                     yaml_kwargs["loras"] = lora_yaml
 
-            # Recolectar rutas de LoRA (si hay) para hashing en metadata
-            lora_paths = [p for p, _s in config.get("loras", [])] if config.get("loras") else None
+            lora_paths = [item["path"] for item in validation.normalized.get("loras", [])] or None
             output_path, metadata_folder, version = save_merge_results(
                 self.output_dir,
                 self.metadata_dir,

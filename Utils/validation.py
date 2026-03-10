@@ -1,0 +1,521 @@
+"""
+Shared validation and preflight utilities for CLI, GUI and batch flows.
+"""
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+import json
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Sequence
+
+from safetensors.torch import safe_open
+
+from .blocks import get_attn2_block_type, get_block_assignment, group_for_key, is_cross_attn_key
+from .memory import check_memory_availability, estimate_memory_requirement, get_available_memory_gb
+
+BLOCK_GROUPS = ["down_0_1", "down_2_3", "mid", "up_0_1", "up_2_3"]
+LEGACY_GROUPS = ["down", "mid", "up", "other"]
+ATTN_BLOCKS = ["down", "mid", "up"]
+
+
+@dataclass
+class ValidationIssue:
+    field: str
+    message: str
+
+
+@dataclass
+class PreflightPlan:
+    mode: str
+    model_names: List[str]
+    backbone_idx: int
+    backbone_name: str
+    selected_model_indices: List[int]
+    selected_models: List[str]
+    loaded_model_indices: List[int]
+    loaded_models: List[str]
+    affected_blocks: List[str]
+    effective_locks: Dict[str, str]
+    loras: List[Dict[str, Any]]
+    estimated_memory_gb: float
+    available_memory_gb: Optional[float]
+    memory_check_ok: bool
+    compatibility_warnings: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+
+@dataclass
+class ValidationResult:
+    valid: bool
+    normalized: Dict[str, Any]
+    errors: List[ValidationIssue] = field(default_factory=list)
+    warnings: List[ValidationIssue] = field(default_factory=list)
+    preflight: Optional[PreflightPlan] = None
+
+
+def _error(result: ValidationResult, field: str, message: str) -> None:
+    result.errors.append(ValidationIssue(field=field, message=message))
+    result.valid = False
+
+
+def _warning(result: ValidationResult, field: str, message: str) -> None:
+    result.warnings.append(ValidationIssue(field=field, message=message))
+
+
+def _safe_int(value: Any) -> int:
+    if isinstance(value, bool):
+        raise ValueError("boolean is not a valid integer index")
+    return int(value)
+
+
+def _safe_float(value: Any) -> float:
+    if isinstance(value, bool):
+        raise ValueError("boolean is not a valid numeric value")
+    return float(value)
+
+
+def _resolve_backbone(backbone: Any, model_names: Sequence[str]) -> int:
+    if isinstance(backbone, str):
+        if backbone not in model_names:
+            raise ValueError(f"unknown backbone '{backbone}'")
+        return model_names.index(backbone)
+    return _safe_int(backbone)
+
+
+def _validate_index(
+    result: ValidationResult,
+    value: Any,
+    field: str,
+    model_count: int,
+) -> Optional[int]:
+    try:
+        idx = _safe_int(value)
+    except (TypeError, ValueError) as exc:
+        _error(result, field, f"must be an integer model index ({exc})")
+        return None
+    if idx < 0 or idx >= model_count:
+        _error(result, field, f"index {idx} out of range for {model_count} selected models")
+        return None
+    return idx
+
+
+def _validate_path_list(result: ValidationResult, model_paths: Sequence[Path]) -> List[Path]:
+    normalized_paths: List[Path] = []
+    if len(model_paths) < 2:
+        _error(result, "models", "select at least two model files")
+        return normalized_paths
+
+    for idx, path in enumerate(model_paths):
+        if not isinstance(path, Path):
+            path = Path(path)
+        if not path.exists():
+            _error(result, f"models[{idx}]", f"file not found: {path}")
+            continue
+        if path.suffix.lower() != ".safetensors":
+            _error(result, f"models[{idx}]", f"unsupported file type: {path.name}")
+            continue
+        normalized_paths.append(path)
+    return normalized_paths
+
+
+def _validate_loras(
+    result: ValidationResult,
+    loras: Optional[Sequence[Any]],
+    loras_dir: Optional[Path],
+) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    if not loras:
+        return normalized
+
+    for idx, entry in enumerate(loras):
+        field = f"loras[{idx}]"
+        path: Optional[Path] = None
+        scale_raw: Any = 1.0
+
+        if isinstance(entry, tuple) and len(entry) == 2:
+            path = Path(entry[0])
+            scale_raw = entry[1]
+        elif isinstance(entry, dict):
+            file_name = entry.get("file")
+            scale_raw = entry.get("scale", 1.0)
+            if not isinstance(file_name, str) or not file_name.strip():
+                _error(result, f"{field}.file", "must be a non-empty filename")
+                continue
+            path = (loras_dir / file_name) if loras_dir else Path(file_name)
+        else:
+            _error(result, field, "must be a tuple(path, scale) or a mapping with file/scale")
+            continue
+
+        try:
+            scale = _safe_float(scale_raw)
+        except (TypeError, ValueError):
+            _error(result, f"{field}.scale", "must be numeric")
+            continue
+
+        if path is None:
+            _error(result, field, "could not resolve LoRA path")
+            continue
+        if not path.exists():
+            _error(result, f"{field}.file", f"file not found: {path}")
+            continue
+        if path.suffix.lower() != ".safetensors":
+            _error(result, f"{field}.file", f"unsupported file type: {path.name}")
+            continue
+
+        normalized.append({"file": path.name, "scale": scale, "path": path})
+
+    return normalized
+
+
+def _validate_legacy_maps(
+    result: ValidationResult,
+    items: Optional[Sequence[Dict[str, Any]]],
+    field: str,
+    model_count: int,
+) -> Optional[List[Dict[str, float]]]:
+    if items is None:
+        return None
+    if not isinstance(items, list):
+        _error(result, field, "must be a list of per-model mappings")
+        return None
+    if len(items) != model_count:
+        _error(result, field, f"must contain {model_count} entries, one per selected model")
+        return None
+
+    normalized: List[Dict[str, float]] = []
+    for model_idx, mapping in enumerate(items):
+        if not isinstance(mapping, dict):
+            _error(result, f"{field}[{model_idx}]", "must be a mapping")
+            normalized.append({})
+            continue
+        per_model: Dict[str, float] = {}
+        for key, value in mapping.items():
+            if key not in LEGACY_GROUPS:
+                _error(result, f"{field}[{model_idx}].{key}", f"unsupported block group '{key}'")
+                continue
+            try:
+                per_model[key] = _safe_float(value)
+            except (TypeError, ValueError):
+                _error(result, f"{field}[{model_idx}].{key}", "must be numeric")
+        normalized.append(per_model)
+    return normalized
+
+
+def _collect_structure_compatibility(model_paths: Sequence[Path]) -> List[str]:
+    if len(model_paths) < 2:
+        return []
+
+    warnings: List[str] = []
+    reference_path = model_paths[0]
+    with safe_open(str(reference_path), framework="pt", device="cpu") as ref_handle:
+        reference_keys = list(ref_handle.keys())
+        reference_key_set = set(reference_keys)
+        reference_shapes = {
+            key: tuple(ref_handle.get_slice(key).get_shape())
+            for key in reference_keys
+        }
+
+    for model_path in model_paths[1:]:
+        with safe_open(str(model_path), framework="pt", device="cpu") as handle:
+            keys = list(handle.keys())
+            key_set = set(keys)
+            missing = len(reference_key_set - key_set)
+            extra = len(key_set - reference_key_set)
+            if missing or extra:
+                warnings.append(
+                    f"{model_path.name}: structure differs from {reference_path.name} "
+                    f"(missing={missing}, extra={extra})"
+                )
+
+            mismatches = 0
+            for key in reference_key_set & key_set:
+                if tuple(handle.get_slice(key).get_shape()) != reference_shapes[key]:
+                    mismatches += 1
+                    if mismatches >= 3:
+                        break
+            if mismatches:
+                warnings.append(
+                    f"{model_path.name}: found shape mismatches against {reference_path.name}"
+                )
+
+    return warnings
+
+
+def validate_merge_request(
+    *,
+    mode: str,
+    model_paths: Sequence[Path],
+    backbone: Any = 0,
+    weights: Optional[Sequence[Any]] = None,
+    assignments: Optional[Dict[str, Any]] = None,
+    hybrid_config: Optional[Dict[str, Dict[str, Any]]] = None,
+    attn2_locks: Optional[Dict[str, Any]] = None,
+    block_multipliers: Optional[Sequence[Dict[str, Any]]] = None,
+    crossattn_boosts: Optional[Sequence[Dict[str, Any]]] = None,
+    loras: Optional[Sequence[Any]] = None,
+    loras_dir: Optional[Path] = None,
+) -> ValidationResult:
+    result = ValidationResult(valid=True, normalized={"mode": mode})
+    normalized_paths = _validate_path_list(result, model_paths)
+    model_names = [path.name for path in normalized_paths]
+    model_count = len(normalized_paths)
+
+    result.normalized["model_paths"] = normalized_paths
+    result.normalized["model_names"] = model_names
+
+    valid_modes = {"legacy", "perres", "hybrid"}
+    if mode not in valid_modes:
+        _error(result, "mode", f"must be one of {sorted(valid_modes)}")
+
+    backbone_idx: Optional[int] = None
+    if model_count:
+        try:
+            backbone_idx = _resolve_backbone(backbone, model_names)
+        except ValueError as exc:
+            _error(result, "backbone", str(exc))
+        else:
+            if backbone_idx < 0 or backbone_idx >= model_count:
+                _error(result, "backbone", f"index {backbone_idx} out of range for {model_count} selected models")
+                backbone_idx = None
+    result.normalized["backbone_idx"] = backbone_idx
+
+    normalized_loras = _validate_loras(result, loras, loras_dir)
+    result.normalized["loras"] = normalized_loras
+
+    if mode == "legacy":
+        normalized_weights: List[float] = []
+        if weights is None:
+            _error(result, "weights", "legacy mode requires a weights array")
+        elif len(weights) != model_count:
+            _error(result, "weights", f"expected {model_count} weights, got {len(weights)}")
+        else:
+            for idx, value in enumerate(weights):
+                try:
+                    weight = _safe_float(value)
+                except (TypeError, ValueError):
+                    _error(result, f"weights[{idx}]", "must be numeric")
+                    continue
+                if weight < 0:
+                    _error(result, f"weights[{idx}]", "cannot be negative")
+                    continue
+                normalized_weights.append(weight)
+
+        if normalized_weights and sum(normalized_weights) <= 0:
+            _error(result, "weights", "sum of weights must be greater than zero")
+        elif normalized_weights:
+            total_weight = sum(normalized_weights)
+            if abs(total_weight - 1.0) > 0.01:
+                _warning(result, "weights", f"weights sum to {total_weight:.3f}; the merge will normalize them")
+
+        result.normalized["weights"] = normalized_weights
+        result.normalized["block_multipliers"] = _validate_legacy_maps(
+            result, block_multipliers, "block_multipliers", model_count
+        )
+        result.normalized["crossattn_boosts"] = _validate_legacy_maps(
+            result, crossattn_boosts, "crossattn_boosts", model_count
+        )
+
+    elif mode == "perres":
+        normalized_assignments: Dict[str, int] = {}
+        if not isinstance(assignments, dict):
+            _error(result, "assignments", "perres mode requires an assignments mapping")
+        else:
+            for block in BLOCK_GROUPS:
+                if block not in assignments:
+                    _error(result, f"assignments.{block}", "missing required assignment")
+                    continue
+                idx = _validate_index(result, assignments[block], f"assignments.{block}", model_count)
+                if idx is not None:
+                    normalized_assignments[block] = idx
+        for block in assignments or {}:
+            if block not in BLOCK_GROUPS:
+                _warning(result, f"assignments.{block}", "unknown block will be ignored")
+        result.normalized["assignments"] = normalized_assignments
+
+    elif mode == "hybrid":
+        normalized_hybrid: Dict[str, Dict[int, float]] = {}
+        if not isinstance(hybrid_config, dict):
+            _error(result, "hybrid_config", "hybrid mode requires a hybrid_config mapping")
+        else:
+            for block in BLOCK_GROUPS:
+                weights_by_model = (hybrid_config or {}).get(block)
+                if not isinstance(weights_by_model, dict):
+                    _error(result, f"hybrid_config.{block}", "missing required block mapping")
+                    continue
+                normalized_block: Dict[int, float] = {}
+                for model_idx, value in weights_by_model.items():
+                    idx = _validate_index(result, model_idx, f"hybrid_config.{block}.{model_idx}", model_count)
+                    if idx is None:
+                        continue
+                    try:
+                        weight = _safe_float(value)
+                    except (TypeError, ValueError):
+                        _error(result, f"hybrid_config.{block}.{model_idx}", "weight must be numeric")
+                        continue
+                    if weight < 0:
+                        _error(result, f"hybrid_config.{block}.{idx}", "weight cannot be negative")
+                        continue
+                    normalized_block[idx] = weight
+
+                if not normalized_block:
+                    _error(result, f"hybrid_config.{block}", "must contain at least one valid model weight")
+                else:
+                    total_weight = sum(normalized_block.values())
+                    if total_weight == 0:
+                        _warning(result, f"hybrid_config.{block}", "all weights are zero; backbone fallback would be used")
+                    elif abs(total_weight - 1.0) > 0.01:
+                        _warning(
+                            result,
+                            f"hybrid_config.{block}",
+                            f"weights sum to {total_weight:.3f}; the merge will normalize them per block",
+                        )
+                normalized_hybrid[block] = normalized_block
+        result.normalized["hybrid_config"] = normalized_hybrid
+
+    normalized_locks: Dict[str, int] = {}
+    if attn2_locks is not None:
+        if not isinstance(attn2_locks, dict):
+            _error(result, "attn2_locks", "must be a mapping of down/mid/up to model indices")
+        else:
+            for block_type, value in attn2_locks.items():
+                if block_type not in ATTN_BLOCKS:
+                    _error(result, f"attn2_locks.{block_type}", "unsupported lock group")
+                    continue
+                idx = _validate_index(result, value, f"attn2_locks.{block_type}", model_count)
+                if idx is not None:
+                    normalized_locks[block_type] = idx
+    result.normalized["attn2_locks"] = normalized_locks or None
+
+    if not result.valid or backbone_idx is None:
+        return result
+
+    if mode == "legacy":
+        selected_indices = sorted(
+            {idx for idx, weight in enumerate(result.normalized["weights"]) if weight > 0} | {backbone_idx}
+        )
+        loaded_indices = list(range(model_count))
+        affected_blocks = ["down", "mid", "up"]
+    elif mode == "perres":
+        assignments_map = result.normalized.get("assignments", {})
+        selected_indices = sorted(set(assignments_map.values()) | set(normalized_locks.values()) | {backbone_idx})
+        loaded_indices = selected_indices[:]
+        affected_blocks = [block for block in BLOCK_GROUPS if block in assignments_map]
+    else:
+        hybrid_map = result.normalized.get("hybrid_config", {})
+        selected = {backbone_idx}
+        for block_weights in hybrid_map.values():
+            selected.update(idx for idx, weight in block_weights.items() if weight > 0)
+        selected.update(normalized_locks.values())
+        selected_indices = sorted(selected)
+        loaded_indices = selected_indices[:]
+        affected_blocks = [block for block in BLOCK_GROUPS if block in hybrid_map]
+
+    try:
+        compatibility_warnings = _collect_structure_compatibility(normalized_paths)
+    except Exception as exc:
+        _error(result, "models", f"could not inspect model structure for preflight: {exc}")
+        return result
+    for warning_text in compatibility_warnings:
+        _warning(result, "compatibility", warning_text)
+
+    estimated_memory_gb = estimate_memory_requirement(
+        normalized_paths,
+        set(loaded_indices if mode != "legacy" else range(model_count)),
+    )
+    available_memory_gb = get_available_memory_gb()
+    memory_ok = check_memory_availability(estimated_memory_gb)
+    if not memory_ok:
+        _warning(
+            result,
+            "memory",
+            f"estimated memory requirement is {estimated_memory_gb:.2f} GB and may exceed available memory",
+        )
+
+    effective_locks = {
+        block_type: model_names[idx]
+        for block_type, idx in normalized_locks.items()
+    }
+
+    result.preflight = PreflightPlan(
+        mode=mode,
+        model_names=model_names,
+        backbone_idx=backbone_idx,
+        backbone_name=model_names[backbone_idx],
+        selected_model_indices=selected_indices,
+        selected_models=[model_names[idx] for idx in selected_indices],
+        loaded_model_indices=loaded_indices if mode != "legacy" else list(range(model_count)),
+        loaded_models=[
+            model_names[idx]
+            for idx in (loaded_indices if mode != "legacy" else list(range(model_count)))
+        ],
+        affected_blocks=affected_blocks,
+        effective_locks=effective_locks,
+        loras=[
+            {"file": item["file"], "scale": item["scale"]}
+            for item in normalized_loras
+        ],
+        estimated_memory_gb=estimated_memory_gb,
+        available_memory_gb=available_memory_gb,
+        memory_check_ok=memory_ok,
+        compatibility_warnings=compatibility_warnings,
+        warnings=[issue.message for issue in result.warnings],
+    )
+
+    return result
+
+
+def preflight_to_dict(plan: PreflightPlan) -> Dict[str, Any]:
+    return asdict(plan)
+
+
+def format_preflight_plan(plan: PreflightPlan) -> str:
+    available = (
+        f"{plan.available_memory_gb:.2f} GB"
+        if plan.available_memory_gb is not None
+        else "unknown"
+    )
+    lines = [
+        "Fusion preflight",
+        "=" * 60,
+        f"Mode: {plan.mode}",
+        f"Backbone: [{plan.backbone_idx}] {plan.backbone_name}",
+        f"Selected models: {', '.join(plan.selected_models) or 'none'}",
+        f"Loaded models: {', '.join(plan.loaded_models) or 'none'}",
+        f"Affected blocks: {', '.join(plan.affected_blocks) or 'none'}",
+        f"Effective locks: {json.dumps(plan.effective_locks, ensure_ascii=False) if plan.effective_locks else 'none'}",
+        f"LoRAs: {json.dumps(plan.loras, ensure_ascii=False) if plan.loras else 'none'}",
+        f"Estimated memory: {plan.estimated_memory_gb:.2f} GB",
+        f"Available memory: {available}",
+        f"Memory check: {'OK' if plan.memory_check_ok else 'warning'}",
+    ]
+
+    if plan.compatibility_warnings:
+        lines.append("")
+        lines.append("Compatibility warnings:")
+        for warning_text in plan.compatibility_warnings:
+            lines.append(f"  - {warning_text}")
+
+    extra_warnings = [
+        warning_text
+        for warning_text in plan.warnings
+        if warning_text not in plan.compatibility_warnings
+    ]
+    if extra_warnings:
+        lines.append("")
+        lines.append("Other warnings:")
+        for warning_text in extra_warnings:
+            lines.append(f"  - {warning_text}")
+
+    return "\n".join(lines)
+
+
+def export_preflight_plan(plan: PreflightPlan, destination: Path) -> Path:
+    destination = Path(destination)
+    if destination.suffix.lower() == ".json":
+        destination.write_text(
+            json.dumps(preflight_to_dict(plan), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    else:
+        destination.write_text(format_preflight_plan(plan), encoding="utf-8")
+    return destination

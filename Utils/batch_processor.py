@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-XLFusion V1.3 - Batch Processor
-===============================
+XLFusion batch processor.
 
-Processes multiple model fusions from YAML configuration files.
-Supports all three fusion modes: Legacy, PerRes, and Hybrid.
+Processes multiple model fusions from YAML configuration files using the same
+validation and preflight layer as CLI and GUI.
 
 Usage:
     python XLFusion.py --batch config.yaml
@@ -22,7 +21,10 @@ from typing import Dict, List, Tuple, Optional, Any, Union
 from dataclasses import dataclass, field
 from datetime import datetime
 
-import yaml
+try:
+    import yaml
+except ImportError:  # pragma: no cover - handled through YAML_AVAILABLE
+    yaml = None
 
 try:
     from tqdm import tqdm
@@ -31,11 +33,12 @@ except ImportError:
     TQDM_AVAILABLE = False
 
 # Import existing XLFusion functions
-from .config import load_config, ensure_dirs, list_safetensors, next_version_path
-from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths, validate_hybrid_config
+from .config import load_config, ensure_dirs, list_safetensors, next_version_path, YAML_AVAILABLE
+from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
 from .lora import apply_single_lora
-from .memory import save_state, estimate_memory_requirement, check_memory_availability
+from .memory import save_state
 from .blocks import UNET_PREFIX
+from .validation import format_preflight_plan, validate_merge_request
 
 
 @dataclass
@@ -66,6 +69,7 @@ class BatchJob:
     backbone_idx: int = 0
     output_path: Optional[Path] = None
     version: Optional[int] = None
+    preflight: Optional[Any] = None
 
     # Results
     success: bool = False
@@ -98,8 +102,11 @@ class BatchValidator:
         self.warnings = []
 
         # Validate version
-        if config.version not in ["1.2", "1.3"]:
-            self.errors.append(f"Unsupported config version: {config.version} (expected 1.2 or 1.3)")
+        if config.version not in ["1.2", "1.3", "2.0", "2.1"]:
+            self.errors.append(
+                f"Unsupported config version: {config.version} "
+                "(expected 1.2, 1.3, 2.0 or 2.1)"
+            )
 
         # Validate global settings
         self._validate_global_settings(config.global_settings)
@@ -107,13 +114,6 @@ class BatchValidator:
         # Validate each job
         for i, job in enumerate(config.batch_jobs):
             self._validate_job(job, i)
-
-        # Resolve model paths for memory validation
-        for job in config.batch_jobs:
-            job.model_paths = [self.models_dir / name for name in job.models]
-
-        # Validate memory requirements
-        self._validate_memory_requirements(config.batch_jobs)
 
         return len(self.errors) == 0
 
@@ -135,107 +135,46 @@ class BatchValidator:
         valid_modes = ["legacy", "perres", "hybrid"]
         if job.mode not in valid_modes:
             self.errors.append(f"{prefix} Invalid mode '{job.mode}'. Must be one of: {valid_modes}")
+            return
 
-        # Validate models exist
-        for model_name in job.models:
-            model_path = self.models_dir / model_name
-            if not model_path.exists():
-                self.errors.append(f"{prefix} Model file not found: {model_path}")
+        job.model_paths = [self.models_dir / name for name in job.models]
+        validation = validate_merge_request(
+            mode=job.mode,
+            model_paths=job.model_paths,
+            backbone=job.backbone,
+            weights=job.weights,
+            assignments=job.assignments,
+            hybrid_config=job.hybrid_config,
+            attn2_locks=job.attn2_locks,
+            block_multipliers=job.block_multipliers,
+            crossattn_boosts=job.crossattn_boosts,
+            loras=job.loras,
+            loras_dir=self.loras_dir,
+        )
 
-        # Mode-specific validation
-        if job.mode == "legacy":
-            self._validate_legacy_job(job, prefix)
-        elif job.mode == "perres":
-            self._validate_perres_job(job, prefix)
-        elif job.mode == "hybrid":
-            self._validate_hybrid_job(job, prefix)
+        for issue in validation.errors:
+            self.errors.append(f"{prefix} {issue.field}: {issue.message}")
+        for issue in validation.warnings:
+            self.warnings.append(f"{prefix} {issue.field}: {issue.message}")
 
-    def _validate_legacy_job(self, job: BatchJob, prefix: str) -> None:
-        """Validate legacy mode job"""
-        if not job.weights:
-            self.errors.append(f"{prefix} Legacy mode requires 'weights' array")
-        elif len(job.weights) != len(job.models):
-            self.errors.append(f"{prefix} Weights array length ({len(job.weights)}) must match models array ({len(job.models)})")
+        if not validation.valid:
+            return
 
-        if job.weights:
-            total_weight = sum(job.weights)
-            if abs(total_weight - 1.0) > 0.01:
-                self.warnings.append(f"{prefix} Weights sum to {total_weight:.3f} (expected ~1.0)")
-
-        # Validate LoRAs if specified
-        if job.loras:
-            for lora in job.loras:
-                if "file" not in lora:
-                    self.errors.append(f"{prefix} LoRA entry missing 'file' field")
-                else:
-                    lora_path = self.loras_dir / lora["file"]
-                    if not lora_path.exists():
-                        self.errors.append(f"{prefix} LoRA file not found: {lora_path}")
-
-    def _validate_perres_job(self, job: BatchJob, prefix: str) -> None:
-        """Validate PerRes mode job"""
-        if not job.assignments:
-            self.errors.append(f"{prefix} PerRes mode requires 'assignments' dict")
-
-        required_blocks = ["down_0_1", "down_2_3", "mid", "up_0_1", "up_2_3"]
-        if job.assignments:
-            for block in required_blocks:
-                if block not in job.assignments:
-                    self.errors.append(f"{prefix} Missing assignment for block: {block}")
-                elif job.assignments[block] >= len(job.models):
-                    self.errors.append(f"{prefix} Assignment for {block} ({job.assignments[block]}) exceeds model count ({len(job.models)})")
-        # Validate LoRAs if specified
-        if job.loras:
-            for lora in job.loras:
-                if "file" not in lora:
-                    self.errors.append(f"{prefix} LoRA entry missing 'file' field")
-                else:
-                    lora_path = self.loras_dir / lora["file"]
-                    if not lora_path.exists():
-                        self.errors.append(f"{prefix} LoRA file not found: {lora_path}")
-
-    def _validate_hybrid_job(self, job: BatchJob, prefix: str) -> None:
-        """Validate hybrid mode job"""
-        if not job.hybrid_config:
-            self.errors.append(f"{prefix} Hybrid mode requires 'hybrid_config' dict")
-
-        if job.hybrid_config:
-            warnings = validate_hybrid_config(job.hybrid_config, len(job.models))
-            for warning in warnings:
-                self.warnings.append(f"{prefix} {warning}")
-        # Validate LoRAs if specified
-        if job.loras:
-            for lora in job.loras:
-                if "file" not in lora:
-                    self.errors.append(f"{prefix} LoRA entry missing 'file' field")
-                else:
-                    lora_path = self.loras_dir / lora["file"]
-                    if not lora_path.exists():
-                        self.errors.append(f"{prefix} LoRA file not found: {lora_path}")
-
-    def _validate_memory_requirements(self, jobs: List[BatchJob]) -> None:
-        """Validate memory requirements for all jobs"""
-        for job in jobs:
-            if not job.model_paths:
-                continue
-
-            needed_indices = set()
-            if job.mode == "legacy":
-                needed_indices = set(range(len(job.model_paths)))
-            elif job.mode == "perres" and job.assignments:
-                needed_indices = set(job.assignments.values())
-            elif job.mode == "hybrid" and job.hybrid_config:
-                for block_config in job.hybrid_config.values():
-                    needed_indices.update(block_config.keys())
-
-            if job.attn2_locks:
-                needed_indices.update(job.attn2_locks.values())
-
-            needed_indices.add(job.backbone_idx)
-
-            required_memory = estimate_memory_requirement(job.model_paths, needed_indices)
-            if not check_memory_availability(required_memory):
-                self.warnings.append(f"Job {job.name}: Estimated memory requirement {required_memory:.1f}GB may exceed available memory")
+        job.model_paths = validation.normalized["model_paths"]
+        job.backbone_idx = validation.normalized["backbone_idx"]
+        job.backbone = job.backbone_idx
+        job.weights = validation.normalized.get("weights")
+        job.assignments = validation.normalized.get("assignments")
+        job.hybrid_config = validation.normalized.get("hybrid_config")
+        job.attn2_locks = validation.normalized.get("attn2_locks")
+        job.block_multipliers = validation.normalized.get("block_multipliers")
+        job.crossattn_boosts = validation.normalized.get("crossattn_boosts")
+        if validation.normalized.get("loras"):
+            job.loras = [
+                {"file": item["file"], "scale": item["scale"]}
+                for item in validation.normalized["loras"]
+            ]
+        job.preflight = validation.preflight
 
 
 class BatchProcessor:
@@ -292,6 +231,8 @@ class BatchProcessor:
 
             try:
                 self.logger.info(f"Processing job: {job.name}")
+                if job.preflight:
+                    self.logger.info("\n" + format_preflight_plan(job.preflight))
                 if not self.validate_only:
                     self._process_job(job)
                 else:
@@ -344,17 +285,10 @@ class BatchProcessor:
 
     def _process_job(self, job: BatchJob) -> None:
         """Process a single job"""
-        # Resolve model paths
-        job.model_paths = [self.models_dir / name for name in job.models]
-
-        # Resolve backbone index
-        if isinstance(job.backbone, str):
-            try:
-                job.backbone_idx = job.models.index(job.backbone)
-            except ValueError:
-                raise ValueError(f"Backbone model '{job.backbone}' not found in models list")
-        else:
-            job.backbone_idx = job.backbone
+        if not job.model_paths:
+            job.model_paths = [self.models_dir / name for name in job.models]
+        if not isinstance(job.backbone_idx, int):
+            raise ValueError("Validated backbone index is missing")
 
         # Process based on mode
         merged_state = None
@@ -424,7 +358,7 @@ class BatchProcessor:
             job.output_path, job.version = next_version_path(output_dir)
 
         # Prepare metadata
-        config = load_config()
+        config = load_config(root=self.root_dir, reporter=None)
         app_cfg = config["app"]
 
         # Verify output_path before using it
@@ -478,7 +412,7 @@ class BatchProcessor:
 
     def _create_audit_log(self, job: BatchJob, meta_embed: Dict[str, str]) -> None:
         """Create detailed audit log for the job"""
-        config = load_config()
+        config = load_config(root=self.root_dir, reporter=None)
         app_cfg = config["app"]
 
         output_name = job.output_path.name if job.output_path else "unknown"
@@ -625,7 +559,7 @@ class BatchProcessor:
 
         lines = [
             "="*60,
-            "XLFusion V1.3 - Batch Processing Summary",
+            "XLFusion Batch Processing Summary",
             "="*60,
             f"Date: {datetime.now().isoformat(timespec='seconds')}",
             f"Total jobs: {results['total_jobs']}",
@@ -652,8 +586,21 @@ class BatchProcessor:
 
 def load_batch_config(config_path: Path) -> BatchConfig:
     """Load and parse batch configuration file"""
-    with open(config_path, 'r', encoding='utf-8') as f:
-        data = yaml.safe_load(f)
+    if not YAML_AVAILABLE:
+        raise RuntimeError("PyYAML is required to read batch configuration files.")
+
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Batch configuration file not found: {config_path}") from exc
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Batch configuration is not valid YAML: {exc}") from exc
+
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise ValueError("Batch configuration must contain a top-level mapping")
 
     # Parse jobs
     jobs = []
@@ -677,7 +624,7 @@ def load_batch_config(config_path: Path) -> BatchConfig:
         jobs.append(job)
 
     return BatchConfig(
-        version=data.get("version", "1.3"),
+        version=data.get("version", "2.1"),
         global_settings=data.get("global_settings", {}),
         batch_jobs=jobs,
         templates=data.get("templates", {})
@@ -760,7 +707,7 @@ def main():
     """Command line interface for batch processing"""
     import argparse
 
-    parser = argparse.ArgumentParser(description="XLFusion V1.3 - Batch Processor")
+    parser = argparse.ArgumentParser(description="XLFusion batch processor")
     parser.add_argument("config", type=Path, help="Batch configuration file")
     parser.add_argument("--validate-only", action="store_true", help="Only validate configuration, don't process")
     parser.add_argument("--template", help="Use specific template (overrides job templates)")
@@ -795,7 +742,7 @@ def main():
                 job.template = args.template
 
         # Validate configuration
-        root_dir = Path(__file__).resolve().parent
+        root_dir = Path(__file__).resolve().parent.parent
         validator = BatchValidator(root_dir)
         is_valid = validator.validate_config(config)
 

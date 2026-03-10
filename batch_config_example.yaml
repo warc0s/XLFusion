@@ -1,9 +1,9 @@
-# XLFusion V1.2 - Batch Configuration Example
+# XLFusion V2.1 - Batch Configuration Example
 # ============================================
 # This file demonstrates how to configure multiple model fusions in batch mode
 # Run with: python XLFusion.py --batch batch_config_example.yaml
 
-version: "1.2"
+version: "2.1"
 
 # Global settings applied to all batch jobs
 global_settings:

@@ -1,14 +1,18 @@
-# XLFusion V2.0
+# XLFusion V2.1
 
-Professional SDXL checkpoint merger with CLI and GUI, focused on reproducibility, per-block control, and batch workflows. It includes three merge modes (Legacy, PerRes, and Hybrid), LoRA baking, advanced analysis, and complete metadata.
+Professional SDXL checkpoint merger with CLI and GUI, focused on reproducibility, per-block control, and batch workflows. It includes three merge modes (Legacy, PerRes, and Hybrid), LoRA baking, advanced analysis, complete metadata, and a shared validation/preflight layer before execution.
 
-## What's New in V2
+## Current Capabilities
 
 - Native GUI (Tk) with a step-by-step assistant and per-block preview.
 - Hybrid mode: per-block assignment + weighted mixing.
 - Batch processing with validation, logs, and reproducible YAML.
 - Analysis tools (diff, compatibility, prediction, recommendations).
 - Enriched metadata: BLAKE2 hashes of inputs, self-contained YAML, and automatic versioning.
+- Robust `config.yaml` loading with safe defaults, partial overrides, and clear fallback messages.
+- Shared validation for CLI, GUI, and batch so invalid configurations never reach the merge engine.
+- Real preflight plan before execution with estimated memory, effective locks, affected blocks, and compatibility warnings.
+- Preflight export to `.txt` or `.json` from CLI and GUI.
 
 ## Merge Modes
 
@@ -40,6 +44,11 @@ pip install -r requirements.txt
 
 Main packages: `torch`, `safetensors`, `PyYAML`, `numpy`, `tqdm`, `psutil`.
 
+Configuration notes:
+- `config.yaml` is optional.
+- Copy `config.yaml.example` to `config.yaml` if you want local overrides.
+- If `config.yaml` is missing or invalid, XLFusion starts with built-in safe defaults.
+
 Note: If you package the GUI on Windows, also install `pyinstaller` and use `scripts/build_gui_exe.py`.
 
 ## Folder Structure
@@ -47,8 +56,9 @@ Note: If you package the GUI on Windows, also install `pyinstaller` and use `scr
 ```
 XLFusion/
 ├── XLFusion.py                 # Main CLI entry point
-├── gui_app.py                  # Graphical interface (V2)
+├── gui_app.py                  # Graphical interface
 ├── config.yaml                 # Centralized configuration
+├── config.yaml.example         # Optional distributable config template
 ├── Utils/                      # Internal modules (merge, lora, batch, analyzer, ...)
 ├── models/                     # Input checkpoints (.safetensors)
 ├── loras/                      # Optional LoRAs (.safetensors)
@@ -82,6 +92,7 @@ GUI features:
 - Model library with size, multi-selection, and sorting.
 - Mode-guided configuration (Legacy, PerRes, Hybrid) and LoRAs.
 - Per-block preview with weights/assignments.
+- Fusion plan preview with exportable preflight report.
 - Real progress and safe cancellation.
 
 ## Batch Processing
@@ -107,11 +118,13 @@ See `batch_config_example.yaml` and `tests/test_batch_full.yaml` for examples of
 
 There are also templates in `Utils/templates.py` and a `templates` section in the example YAML.
 
+Batch validation now reuses the same shared validator as CLI and GUI, including memory and compatibility warnings.
+
 Shortcuts:
 - `scripts/run_batch.sh <config.yaml>`
 - `scripts/run_batch_validate.sh <config.yaml>`
 
-## Analysis Mode (V1.3)
+## Analysis Mode
 
 Tools to understand differences, compatibility, and predict merge characteristics.
 
@@ -179,7 +192,7 @@ The script creates test models, runs a batch with 4 jobs, and removes temporary 
 
 ## Roadmap
 
-See `ROADMAP.md` for V2.1+ goals (stronger validation, memory/compatibility preflight, performance and extensibility improvements).
+See `ROADMAP.md` for future work after V2.1: performance, presets, recovery from metadata, and deeper analysis.
 
 ## Credits and Contact
 

@@ -1,0 +1,34 @@
+# XLFusion V2.1 Configuration
+# Copy this file to config.yaml if you want local overrides.
+
+model_output:
+  base_name: "XLFusion"
+  version_prefix: "V"
+  file_extension: ".safetensors"
+  output_dir: "output"
+  metadata_dir: "metadata"
+  auto_version: true
+
+directories:
+  models: "models"
+  loras: "loras"
+  output: "output"
+  metadata: "metadata"
+
+merge_defaults:
+  legacy:
+    cross_attention_boost: 1.0
+    down_blocks_multiplier: 1.0
+    mid_blocks_multiplier: 1.0
+    up_blocks_multiplier: 1.0
+  perres:
+    cross_attention_locks: false
+  hybrid:
+    primary_model_weight: 0.7
+    cross_attention_locks: false
+    auto_normalize_weights: true
+    minimum_weight_threshold: 0.01
+
+app:
+  tool_name: "XLFusion"
+  version: "2.1"

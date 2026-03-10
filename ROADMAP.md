@@ -1,99 +1,146 @@
-### V2.1 Corrección, validación y UX técnica
+# XLFusion Roadmap
 
-Objetivo: resultados más predecibles y configuración robusta.
+Estado actual: `main` ya cubre V2.1 con CLI, GUI, batch, analisis, metadatos reproducibles, validacion comun y preflight. Este roadmap recoge solo mejoras futuras que todavia aportan valor real a la aplicacion.
 
-1. Validación consistente de configuraciones
-   • Generaliza la validación a todos los modos. Ahora solo `validate_hybrid_config` hace chequeos serios. Extrae un validador común que verifique: suma de pesos por bloque, índices, existencia de claves y forma de tensores cuando hay locks. Ganchos en `XLFusion.py` antes de llamar a la fusión.  
+## Principios para siguientes versiones
 
-Criterio de aceptación: una configuración inválida nunca llega a `merge_*`; los mensajes de error indican bloque, índice y causa.
+- Priorizar fiabilidad antes que mas modos de fusion.
+- Mejorar memoria y tiempos sin sacrificar reproducibilidad.
+- Unificar experiencia entre CLI, GUI y batch.
+- Convertir el analisis en ayuda real para tomar decisiones de mezcla.
 
-2. Arreglar semántica para N modelos en CLI
-   • `prompt_block_merge` y `prompt_crossattn_boost` no deben asignar “1 − w” a todos los modelos no cero. Cambia a un input vectorial por modelo o a normalización automática de la fila. Actualiza GUI Hybrid y Legacy para denotar distribución correcta por bloque.  
+## V2.2 Flujo experto y alto rendimiento
 
-Criterio: con 3 modelos puedes definir boosts y multiplicadores por bloque y la suma se normaliza a 1.0 por bloque.
+Objetivo: hacer que XLFusion escale mejor en memoria, sea mas rapido y permita reutilizar configuraciones complejas sin friccion.
 
-3. Modo “plan” o preflight
-   • En CLI y GUI, añade un paso que calcule memoria estimada, número de claves afectadas por bloque y advertencias de compatibilidad antes de ejecutar. Ya usas estimación de memoria dentro de `merge_*`; expón ese cálculo y llámalo en la vista previa.  
+### 1. Modo low-memory tensor a tensor
 
-Criterio: el usuario ve memoria estimada, conteo por bloque, locks efectivos y avisos antes de pulsar “Iniciar fusión”.
+- Introducir un cargador estilo `safe_open` tensor a tensor para rutas de memoria limitada.
+- Preservar dtype en disco y convertir solo durante acumulacion cuando haga falta.
+- Exponer esta ruta como opcion clara en CLI, GUI y batch.
 
-4. Metadatos fortalecidos
-   • En `save_merge_results` agrega huellas BLAKE2 de cada checkpoint y LoRA, versión de torch, parámetros exactos por bloque y device. Es el sitio adecuado para ampliar lo que luego rehidratas vía YAML. 
+Criterio de aceptacion:
+- Fusionar modelos grandes consume menos RAM que la ruta actual y sigue generando resultados equivalentes dentro de tolerancia numerica.
 
-Criterio: `metadata.txt` y el metadato embebido incluyen hashes de entrada y configuración completa reproducible.
+### 2. Pre-carga y ordenacion por bloque
 
-5. Progreso determinista
-   • En GUI reemplaza la barra indeterminada por progreso real usando `len(base_keys)` del backbone y cuenta de claves procesadas en los bucles de `merge_*`. Ya iteras clave a clave con tqdm. Propaga ticks a la cola de log.  
+- Procesar claves agrupadas por bloque para reducir overhead de acceso.
+- Evaluar prefetch ligero entre modelos cuando el almacenamiento lo permita.
+- Medir mejoras con benchmarks sobre 2, 3 y 4 checkpoints.
 
----
+Criterio de aceptacion:
+- Documentar mejora medible en throughput frente a la ruta actual en escenarios repetibles.
 
-### V2.2 Rendimiento y escalabilidad
+### 3. Progreso ligero fuera de TTY
 
-Objetivo: acelerar sin romper memoria.
+- Mantener `tqdm` donde aporta valor, pero ofrecer una salida de progreso simple para logs, entornos no interactivos y empaquetados.
+- Evitar ruido excesivo en batch y facilitar cancelacion/observabilidad.
 
-1. E/S paralela segura
-   • Las lecturas desde `safe_open` son I/O bound. Paraleliza la extracción por clave entre modelos con un pool de hilos o prefetch de tensores en colas. Mantén la suma en el hilo principal para no fragmentar memoria. 
+Criterio de aceptacion:
+- La aplicacion informa progreso util tanto en terminal interactiva como en logs o GUI sin duplicar salidas.
 
-Criterio: mejora del 15 a 30 % en throughput en discos NVMe en pruebas con 2 y 3 modelos.
+### 4. Presets reutilizables de verdad
 
-2. Lote por bloque
-   • En Hybrid y PerRes, procesa claves agrupadas por bloque para minimizar cambios de manejador. Ya tienes `get_block_assignment` y stats por bloque. Ordena las listas antes de iterar. 
+- Unificar `templates`, presets de GUI y configuraciones batch en un solo sistema.
+- Permitir guardar una configuracion creada en GUI o CLI como preset reutilizable.
+- Permitir cargar presets desde metadata previa.
 
----
+Criterio de aceptacion:
+- Una fusion configurada en GUI puede guardarse y relanzarse por batch sin editar a mano.
 
-### V2.3 Extensibilidad y limpieza interna
+### 5. Recuperacion desde metadatos
 
-Objetivo: desacoplar y permitir ampliar.
+- Añadir comando para reconstruir una ejecucion a partir de `metadata/meta_*`.
+- Rehidratar configuracion exacta, entradas y nombre de salida propuesto.
+- Señalar diferencias si faltan modelos o LoRAs originales.
 
-1. Motor de plantillas único
-   • Ahora hay dos sistemas de plantillas: uno simple en `templates.py` y otro con evaluación segura en el batch via `interpolate_params`. Unifica el segundo como servicio reusable y úsalo en CLI y GUI cuando el usuario seleccione una plantilla.  
+Criterio de aceptacion:
+- Desde una carpeta de metadata se puede relanzar la fusion o generar un YAML equivalente.
 
-2. Plugins de mapeo de bloques
-   • `blocks.get_block_assignment` gobierna todo. Define un registro de patrones para admitir arquitecturas o particionados alternativos sin tocar `merge.py` ni `analyzer.py`.  
+### 6. UX de configuracion mas segura
 
----
+- Mejorar formularios de GUI para pesos por bloque, locks y LoRAs con validacion inline.
+- En CLI, simplificar prompts complejos y mostrar defaults mas legibles.
+- Añadir confirmacion final con resumen antes de ejecutar.
 
-### V2.4 Calidad de fusión y análisis avanzado
+Criterio de aceptacion:
+- Configurar una fusion compleja de 3 o 4 modelos requiere menos pasos y menos errores de entrada.
 
-Objetivo: que las decisiones de mezcla se apoyen en métricas útiles.
+## V2.3 Calidad de fusion y analisis accionable
 
-1. Analítica cuantitativa ampliada
-   • En `analyzer.py` amplía el muestreo de similitud y añade métricas por submódulo y capa. Registra histogramas de cosenos y L2 por bloque y un score de “coherencia estructural” independiente de estilo. 
+Objetivo: pasar de "ver datos" a "tomar mejores decisiones de mezcla".
 
-2. Autoajuste de pesos
-   • Implementa una búsqueda de cuadrícula o bayesiana sobre 2 o 3 grados de libertad por bloque, con la métrica anterior como objetivo y restricciones de dominancia máxima por modelo. Devuelve una plantilla Hybrid recomendada. 
+### 1. Analisis por submodulo y capa
 
-3. Informe de previsión en GUI
-   • Integra `FusionPredictor` en la vista previa. Muestra dominancia prevista por bloque y alerta de baja diversidad.  
+- Ampliar el analizador con metricas por submodulo, histogramas y resumen por zonas del modelo.
+- Separar mejor estructura, semantica y estilo para que la recomendacion no sea solo un score global.
 
----
+Criterio de aceptacion:
+- El informe ayuda a entender que modelo domina composicion, detalle y estilo.
 
-### V2.5 Reproducibilidad, auditoría y seguridad
+### 2. Recomendador de pesos y bloques
 
-Objetivo: trazabilidad fuerte y ejecución segura.
+- Generar sugerencias iniciales de `hybrid_config`, `assignments` y backbone a partir del analisis.
+- Ofrecer perfiles como `balanced`, `style transfer`, `detail recovery` o `prompt fidelity`.
 
-1. Auditoría exhaustiva
-   • `BatchProcessor` ya crea un log y YAML. Añade registro de hashes de entrada, huellas del entorno y un inventario de claves realmente tomadas del backbone vs. sustituidas. 
+Criterio de aceptacion:
+- El usuario puede partir de una propuesta razonable sin configurar todo a mano.
 
-2. Esquema de configuración validado
-   • Define un esquema pydantic para los YAML de batch y para los presets de GUI. Valida antes de ejecutar en todos los modos. 
+### 3. Alertas de compatibilidad antes de fusionar
 
-3. Modo “sólo UNet” opcional en todos los modos
-   • En Legacy ya existe `only_unet=True`. Expónlo en CLI y GUI y añade la opción de incluir VAE y text encoder cuando el usuario quiera. Cambios mínimos en `stream_weighted_merge_from_paths` y en orquestación.  
+- Detectar diferencias potencialmente peligrosas antes de ejecutar: shapes incompatibles, modelos demasiado alejados, locks incoherentes o combinaciones con bajo valor esperado.
+- Integrar estas alertas en preflight y GUI.
 
----
+Criterio de aceptacion:
+- Las combinaciones de alto riesgo se detectan antes de gastar tiempo y memoria en una fusion fallida o mediocre.
 
-### V2.6 Ampliaciones funcionales de alto impacto
+### 4. Algebra de checkpoints
 
-Objetivo: personalización real y casos avanzados.
+- Añadir operaciones tipo `A + alpha(B - C)` y variantes compatibles con `legacy` y `hybrid`.
+- Reutilizar el motor streaming para evitar disparar memoria.
+- Exponerlo como modo avanzado, no como sustituto del flujo principal.
 
-1. Álgebra de checkpoints
-   • Añade operaciones A + α(B − C) en Legacy y Hybrid. Nueva bandera CLI y controles GUI. Se implementa reusando el streaming: carga clave de B y C, calcula delta y añade a A según pesos del bloque. 
+Criterio de aceptacion:
+- Hay tests sinteticos que verifican la aritmetica tensorial y la salida queda auditada en metadata.
 
-Criterio: prueba unitaria con tensores sintéticos que verifica que el resultado coincide con la aritmética.
+### 5. Soporte LoRA ampliado
 
-2. Soporte LoRA ampliado
-   • `lora.py` solo cubre UNet. Extiende mapeos para text encoders cuando existan claves LoRA correspondientes y añade validación de forma. Reporte de aplicados y omitidos por submódulo. 
+- Extender el horneado de LoRAs mas alla de UNet cuando existan claves compatibles para text encoders.
+- Añadir mejor validacion de shape y un reporte por submodulo aplicado/omitido.
 
-3. Plantillas guiadas “objetivo” en GUI
-   • Inserta las plantillas de `templates.py` en el paso de configuración con explicación y parámetros editables, usando el motor unificado del punto V2.3.  
+Criterio de aceptacion:
+- El usuario sabe exactamente que partes de la LoRA se aplicaron y cuales no.
+
+### 6. Exponer mezcla no solo UNet
+
+- Convertir `only_unet` en una opcion visible y soportada en todos los modos.
+- Permitir incluir o excluir VAE y text encoder de forma explicita cuando tenga sentido.
+
+Criterio de aceptacion:
+- La configuracion deja claro que componentes se mezclan y esa decision queda guardada en metadata.
+
+## V2.4 Plataforma y evolucion interna
+
+Objetivo: facilitar que el proyecto siga creciendo sin repetir logica ni abrir regresiones.
+
+### 1. API interna mas clara
+
+- Delimitar mejor capas de `config`, `merge`, `workflow`, `analysis` y GUI.
+- Reducir duplicacion entre CLI interactiva, batch y GUI.
+- Formalizar tipos de configuracion compartidos.
+
+### 2. Cobertura de tests orientada a regresiones reales
+
+- Priorizar tests sobre validacion, cancelacion, metadata reproducible, modos low-memory y algebra de checkpoints.
+- Añadir fixtures sinteticos para comparar salidas entre distintas rutas de ejecucion.
+
+### 3. Arquitecturas futuras sin tocar el core
+
+- Preparar un registro de mapeos de bloques para soportar otras particiones o arquitecturas derivadas sin modificar el motor principal.
+- Mantener SDXL como ruta principal, pero evitar acoplamientos innecesarios.
+
+## Prioridades recomendadas
+
+1. V2.2 Flujo experto y alto rendimiento
+2. V2.3 Calidad de fusion y analisis accionable
+3. V2.4 Plataforma y evolucion interna
