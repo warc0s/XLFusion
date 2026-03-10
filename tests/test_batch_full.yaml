@@ -1,6 +1,4 @@
 # Smoke test batch configuration using tiny synthetic models
-version: "1.3"
-
 global_settings:
   output_base: "test_output"
   continue_on_error: true
@@ -63,4 +61,3 @@ batch_jobs:
       down: 0
       mid: 0
       up: 1
-

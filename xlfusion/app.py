@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-XLFusion V2.15 - Advanced SDXL checkpoint merger
+XLFusion - Advanced SDXL checkpoint merger
 
 Interactive and graphical SDXL checkpoint merger with three fusion modes:
 - Legacy: Classic weighted merge with down/mid/up blocks and optional LoRA baking
@@ -37,7 +37,7 @@ from .cli import (
     prompt_select,
     prompt_weights,
 )
-from .config import ensure_dirs, list_safetensors
+from .config import list_safetensors, resolve_app_context
 from .lora import apply_single_lora
 from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
 from .validation import export_preflight_plan, format_preflight_plan, validate_merge_request
@@ -177,13 +177,17 @@ def main() -> int:
     parser.add_argument("--compare", nargs=2, metavar=('MODEL1', 'MODEL2'), help="Compare two models (indices)")
     parser.add_argument("--recommend", choices=['style_transfer', 'detail_enhance', 'balanced'], help="Generate recommendations for fusion goal")
     parser.add_argument("--export-analysis", type=Path, metavar='PATH', help="Export analysis to JSON file")
-    parser.add_argument("--gui", action="store_true", help="Launch graphical interface (V2.15)")
+    parser.add_argument("--gui", action="store_true", help="Launch graphical interface")
 
     args = parser.parse_args()
 
     # Setup directories
-    root = Path(__file__).resolve().parent.parent
-    models_dir, loras_dir, output_dir, metadata_dir = ensure_dirs(root)
+    context = resolve_app_context(Path(__file__).resolve().parent.parent)
+    root = context.root_dir
+    models_dir = context.models_dir
+    loras_dir = context.loras_dir
+    output_dir = context.output_dir
+    metadata_dir = context.metadata_dir
 
     if args.gui:
         if any([args.batch, args.analyze, args.compare, args.recommend]):
@@ -211,7 +215,7 @@ def main() -> int:
         except Exception as exc:
             print(f"Error: {exc}")
             return 1
-        validator = BatchValidator(root)
+        validator = BatchValidator(context)
         if not validator.validate_config(config):
             print("Batch configuration validation failed:")
             for error in validator.errors:
@@ -220,13 +224,13 @@ def main() -> int:
                 print(f"  WARNING: {warning}")
             return 1
         
-        processor = BatchProcessor(config, root, args.validate_only)
+        processor = BatchProcessor(config, context, args.validate_only)
         results = processor.process_batch()
         return 0 if results["failed_jobs"] == 0 else 1
 
     # Interactive mode
     print("\n" + "="*60)
-    print(" XLFusion V2.15 - Advanced SDXL checkpoint merger")
+    print(" XLFusion - Advanced SDXL checkpoint merger")
     print("="*60)
     print(f"\nDetected structure:")
     print(f"  models:   {models_dir}")

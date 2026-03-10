@@ -1,4 +1,4 @@
-# XLFusion V2.15 Configuration
+# XLFusion Configuration
 # Copy this file to config.yaml if you want local overrides.
 
 model_output:
@@ -31,4 +31,3 @@ merge_defaults:
 
 app:
   tool_name: "XLFusion"
-  version: "2.15"

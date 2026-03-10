@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -17,6 +18,18 @@ except ImportError:  # pragma: no cover - exercised indirectly
 
 
 ConfigReporter = Optional[Callable[[str], None]]
+
+
+@dataclass(frozen=True)
+class AppContext:
+    """Resolved application paths and loaded config for one repository root."""
+
+    root_dir: Path
+    config: Dict[str, Any]
+    models_dir: Path
+    loras_dir: Path
+    output_dir: Path
+    metadata_dir: Path
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "model_output": {
@@ -52,7 +65,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "app": {
         "tool_name": "XLFusion",
-        "version": "2.15",
     },
 }
 
@@ -191,17 +203,39 @@ def load_config(
     return _merge_known_config(config, raw_data, reporter=reporter)
 
 
-def ensure_dirs(root: Path) -> Tuple[Path, Path, Path, Path]:
-    config = load_config(root=root)
+def resolve_app_context(
+    root: Path,
+    *,
+    reporter: ConfigReporter = print,
+    create_dirs: bool = True,
+) -> AppContext:
+    """Resolve config and runtime directories from a repo root."""
+    root_dir = _resolve_config_root(root)
+    config = load_config(root=root_dir, reporter=reporter)
     dirs = config["directories"]
 
-    models = root / dirs["models"]
-    loras = root / dirs["loras"]
-    output = root / dirs["output"]
-    metadata = root / dirs["metadata"]
-    for p in [models, loras, output, metadata]:
-        p.mkdir(parents=True, exist_ok=True)
-    return models, loras, output, metadata
+    models_dir = root_dir / dirs["models"]
+    loras_dir = root_dir / dirs["loras"]
+    output_dir = root_dir / dirs["output"]
+    metadata_dir = root_dir / dirs["metadata"]
+
+    if create_dirs:
+        for path in (models_dir, loras_dir, output_dir, metadata_dir):
+            path.mkdir(parents=True, exist_ok=True)
+
+    return AppContext(
+        root_dir=root_dir,
+        config=config,
+        models_dir=models_dir,
+        loras_dir=loras_dir,
+        output_dir=output_dir,
+        metadata_dir=metadata_dir,
+    )
+
+
+def ensure_dirs(root: Path) -> Tuple[Path, Path, Path, Path]:
+    context = resolve_app_context(root, create_dirs=True)
+    return context.models_dir, context.loras_dir, context.output_dir, context.metadata_dir
 
 
 def list_safetensors(folder: Path) -> List[Path]:
@@ -250,7 +284,6 @@ def generate_batch_config_yaml(
         raise RuntimeError("PyYAML is required to generate batch YAML files.")
 
     config = {
-        "version": "2.1",
         "global_settings": {
             "output_base": "recreated_output",
             "continue_on_error": True,

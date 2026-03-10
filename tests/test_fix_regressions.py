@@ -57,7 +57,6 @@ class LegacyContractTests(unittest.TestCase):
 class BatchFixRegressionTests(unittest.TestCase):
     def test_template_arithmetic_resolves_via_load_batch_config(self) -> None:
         config_text = """
-version: "2.1"
 global_settings:
   output_base: "out"
   continue_on_error: true
@@ -95,7 +94,7 @@ templates:
     def test_batch_job_with_partial_locks_saves_metadata_without_error(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            (root / "config.yaml").write_text('app:\n  tool_name: XLFusion\n  version: "2.15"\n', encoding="utf-8")
+            (root / "config.yaml").write_text('app:\n  tool_name: XLFusion\n', encoding="utf-8")
             models_dir = root / "workspace" / "models"
             models_dir.mkdir(parents=True, exist_ok=True)
             m1 = models_dir / "a.safetensors"
@@ -113,7 +112,6 @@ templates:
                 output_name="PartialLocks",
             )
             config = BatchConfig(
-                version="2.1",
                 global_settings={"output_base": "batch_output", "continue_on_error": True, "max_parallel": 1},
                 batch_jobs=[job],
             )
@@ -142,7 +140,7 @@ templates:
     def test_batch_metadata_includes_hashes_and_custom_output_name(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            (root / "config.yaml").write_text('app:\n  tool_name: XLFusion\n  version: "2.15"\n', encoding="utf-8")
+            (root / "config.yaml").write_text('app:\n  tool_name: XLFusion\n', encoding="utf-8")
             models_dir = root / "workspace" / "models"
             models_dir.mkdir(parents=True, exist_ok=True)
             m1 = models_dir / "a.safetensors"
@@ -159,7 +157,6 @@ templates:
                 output_name="BatchCustom",
             )
             config = BatchConfig(
-                version="2.1",
                 global_settings={"output_base": "batch_output", "continue_on_error": True, "max_parallel": 1},
                 batch_jobs=[job],
             )

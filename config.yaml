@@ -1,4 +1,4 @@
-# XLFusion V2.15 Configuration
+# XLFusion Configuration
 # =====================================
 # Centralized configuration for XLFusion checkpoint merger
 # This file controls all aspects of model merging behavior, naming, and output
@@ -97,9 +97,5 @@ merge_defaults:
 # Core application configuration and behavior
 app:
   # Tool identifier used in metadata and audit logs
-  # This name appears in all generated metadata files for tracking purposes
+  # This name appears in generated metadata files for tracking purposes
   tool_name: "XLFusion"
-
-  # Application version - recorded in metadata for merge reproducibility
-  # Format: "major.minor" (e.g., "1.0", "2.15")
-  version: "2.15"

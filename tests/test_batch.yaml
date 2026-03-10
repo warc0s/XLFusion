@@ -1,6 +1,4 @@
 # Test batch configuration for validation
-version: "1.2"
-
 global_settings:
   output_base: "test_output"
   continue_on_error: true

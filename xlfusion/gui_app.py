@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 
-from .config import ensure_dirs, list_safetensors, load_config
+from .config import AppContext, list_safetensors
 from .lora import apply_single_lora
 from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
 from .validation import export_preflight_plan, format_preflight_plan, validate_merge_request
@@ -763,21 +763,18 @@ class HybridConfigPanel(ttk.Frame):
 
 
 class FusionGUI:
-    """Main graphical interface of XLFusion V2.15."""
+    """Main graphical interface of XLFusion."""
 
     def __init__(
         self,
-        root_dir: Path,
-        models_dir: Path,
-        loras_dir: Path,
-        output_dir: Path,
-        metadata_dir: Path,
+        context: AppContext,
     ) -> None:
-        self.root_dir = root_dir
-        self.models_dir = models_dir
-        self.loras_dir = loras_dir
-        self.output_dir = output_dir
-        self.metadata_dir = metadata_dir
+        self.context = context
+        self.root_dir = context.root_dir
+        self.models_dir = context.models_dir
+        self.loras_dir = context.loras_dir
+        self.output_dir = context.output_dir
+        self.metadata_dir = context.metadata_dir
 
         self.state: Dict[str, object] = {
             "model_indices": [],
@@ -793,8 +790,8 @@ class FusionGUI:
         self.lora_paths: List[Path] = []
 
         self.root = tk.Tk()
-        version = load_config()["app"].get("version", "2.15")
-        self.root.title(f"XLFusion V{version} - Graphical Interface")
+        tool_name = self.context.config["app"].get("tool_name", "XLFusion")
+        self.root.title(f"{tool_name} - Graphical Interface")
         self.root.geometry("980x720")
         self.root.minsize(840, 600)
 
@@ -1550,8 +1547,9 @@ class FusionGUI:
 
 
 def launch_gui(root_dir: Path) -> None:
-    models_dir, loras_dir, output_dir, metadata_dir = ensure_dirs(root_dir)
-    app = FusionGUI(root_dir, models_dir, loras_dir, output_dir, metadata_dir)
+    from .config import resolve_app_context
+
+    app = FusionGUI(resolve_app_context(root_dir))
     app.run()
 
 

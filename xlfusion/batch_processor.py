@@ -1,722 +1,29 @@
 #!/usr/bin/env python3
-"""
-XLFusion batch processor.
-
-Processes multiple model fusions from YAML configuration files using the same
-validation and preflight layer as CLI and GUI.
-
-Usage:
-    python XLFusion.py --batch config.yaml
-    python XLFusion.py --batch config.yaml --validate-only
-    python XLFusion.py --batch config.yaml --template style_transfer
-"""
-
+"""Public batch entry points and CLI wrapper."""
 from __future__ import annotations
-import sys
-import json
-import time
-import logging
-import copy
-import ast
+
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any, Union
-from dataclasses import dataclass, field
-from datetime import datetime
 
-try:
-    import yaml
-except ImportError:  # pragma: no cover - handled through YAML_AVAILABLE
-    yaml = None
-
-try:
-    from tqdm import tqdm
-    TQDM_AVAILABLE = True
-except ImportError:
-    TQDM_AVAILABLE = False
-
-# Import existing XLFusion functions
-from .config import load_config, ensure_dirs, list_safetensors, YAML_AVAILABLE
-from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
-from .lora import apply_single_lora
-from .workflow import save_merge_results
-from .validation import format_preflight_plan, validate_merge_request
-
-
-@dataclass
-class BatchJob:
-    """Represents a single batch job configuration"""
-    name: str
-    mode: str
-    description: str = ""
-    models: List[str] = field(default_factory=list)
-    backbone: Union[int, str] = 0
-    output_name: Optional[str] = None
-
-    # Mode-specific configurations
-    weights: Optional[List[float]] = None
-    assignments: Optional[Dict[str, int]] = None
-    hybrid_config: Optional[Dict[str, Dict[str, float]]] = None
-    attn2_locks: Optional[Dict[str, int]] = None
-    block_multipliers: Optional[List[Dict[str, float]]] = None
-    crossattn_boosts: Optional[List[Dict[str, float]]] = None
-    loras: Optional[List[Dict[str, Any]]] = None
-
-    # Template support
-    template: Optional[str] = None
-    template_params: Optional[Dict[str, Any]] = None
-
-    # Internal state
-    model_paths: List[Path] = field(default_factory=list)
-    backbone_idx: int = 0
-    output_path: Optional[Path] = None
-    version: Optional[int] = None
-    preflight: Optional[Any] = None
-
-    # Results
-    success: bool = False
-    error_message: str = ""
-    processing_time: float = 0.0
-    keys_processed: int = 0
-
-
-@dataclass
-class BatchConfig:
-    """Complete batch configuration"""
-    version: str
-    global_settings: Dict[str, Any]
-    batch_jobs: List[BatchJob]
-    templates: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-
-
-class BatchValidator:
-    """Validates batch configuration before execution"""
-
-    def __init__(self, root_dir: Path):
-        self.root_dir = root_dir
-        self.models_dir, self.loras_dir, self.output_dir, self.metadata_dir = ensure_dirs(root_dir)
-        self.errors: List[str] = []
-        self.warnings: List[str] = []
-
-    def validate_config(self, config: BatchConfig) -> bool:
-        """Validate entire batch configuration"""
-        self.errors = []
-        self.warnings = []
-
-        # Validate version
-        if config.version not in ["1.2", "1.3", "2.0", "2.1"]:
-            self.errors.append(
-                f"Unsupported config version: {config.version} "
-                "(expected 1.2, 1.3, 2.0 or 2.1)"
-            )
-
-        # Validate global settings
-        self._validate_global_settings(config.global_settings)
-
-        # Validate each job
-        for i, job in enumerate(config.batch_jobs):
-            self._validate_job(job, i)
-
-        return len(self.errors) == 0
-
-    def _validate_global_settings(self, settings: Dict[str, Any]) -> None:
-        """Validate global settings"""
-        required_keys = ["output_base", "continue_on_error", "max_parallel"]
-        for key in required_keys:
-            if key not in settings:
-                self.errors.append(f"Missing global setting: {key}")
-
-        if "max_parallel" in settings and settings["max_parallel"] != 1:
-            self.warnings.append("Parallel processing not yet implemented, max_parallel will be ignored")
-
-    def _validate_job(self, job: BatchJob, index: int) -> None:
-        """Validate individual job"""
-        prefix = f"Job {index} ({job.name}):"
-
-        # Validate mode
-        valid_modes = ["legacy", "perres", "hybrid"]
-        if job.mode not in valid_modes:
-            self.errors.append(f"{prefix} Invalid mode '{job.mode}'. Must be one of: {valid_modes}")
-            return
-
-        job.model_paths = [self.models_dir / name for name in job.models]
-        validation = validate_merge_request(
-            mode=job.mode,
-            model_paths=job.model_paths,
-            backbone=job.backbone,
-            weights=job.weights,
-            assignments=job.assignments,
-            hybrid_config=job.hybrid_config,
-            attn2_locks=job.attn2_locks,
-            block_multipliers=job.block_multipliers,
-            crossattn_boosts=job.crossattn_boosts,
-            loras=job.loras,
-            loras_dir=self.loras_dir,
-        )
-
-        for issue in validation.errors:
-            self.errors.append(f"{prefix} {issue.field}: {issue.message}")
-        for issue in validation.warnings:
-            self.warnings.append(f"{prefix} {issue.field}: {issue.message}")
-
-        if not validation.valid:
-            return
-
-        job.model_paths = validation.normalized["model_paths"]
-        job.backbone_idx = validation.normalized["backbone_idx"]
-        job.backbone = job.backbone_idx
-        job.weights = validation.normalized.get("weights")
-        job.assignments = validation.normalized.get("assignments")
-        job.hybrid_config = validation.normalized.get("hybrid_config")
-        job.attn2_locks = validation.normalized.get("attn2_locks")
-        job.block_multipliers = validation.normalized.get("block_multipliers")
-        job.crossattn_boosts = validation.normalized.get("crossattn_boosts")
-        if validation.normalized.get("loras"):
-            job.loras = [
-                {"file": item["file"], "scale": item["scale"]}
-                for item in validation.normalized["loras"]
-            ]
-        job.preflight = validation.preflight
-
-
-class BatchProcessor:
-    """Processes batch jobs sequentially"""
-
-    def __init__(self, config: BatchConfig, root_dir: Path, validate_only: bool = False):
-        self.config = config
-        self.root_dir = root_dir
-        self.validate_only = validate_only
-        self.models_dir, self.loras_dir, self.output_dir, self.metadata_dir = ensure_dirs(root_dir)
-
-        # Setup logging
-        self._setup_logging()
-
-        # Progress tracking
-        self.total_jobs = len(config.batch_jobs)
-        self.completed_jobs = 0
-        self.failed_jobs = 0
-
-    def _setup_logging(self) -> None:
-        """Setup structured logging"""
-        log_level = getattr(logging, self.config.global_settings.get("log_level", "INFO").upper())
-        handlers = [logging.StreamHandler(sys.stdout)]
-        if self.config.global_settings.get("log_to_file", False):
-            handlers.insert(0, logging.FileHandler(self.root_dir / "batch_log.txt"))
-
-        logging.basicConfig(
-            level=log_level,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=handlers,
-        )
-        self.logger = logging.getLogger("XLFusion.Batch")
-
-    def process_batch(self) -> Dict[str, Any]:
-        """Process all batch jobs"""
-        start_time = time.time()
-        self.logger.info(f"Starting batch processing of {self.total_jobs} jobs")
-
-        results = {
-            "total_jobs": self.total_jobs,
-            "successful_jobs": 0,
-            "failed_jobs": 0,
-            "total_time": 0.0,
-            "jobs": []
-        }
-
-        # Create progress bar if available
-        progress_bar = None
-        if TQDM_AVAILABLE and not self.validate_only:
-            progress_bar = tqdm(total=self.total_jobs, desc="Batch Progress", unit="job")
-
-        for job in self.config.batch_jobs:
-            job_start = time.time()
-
-            try:
-                self.logger.info(f"Processing job: {job.name}")
-                if job.preflight:
-                    self.logger.info("\n" + format_preflight_plan(job.preflight))
-                if not self.validate_only:
-                    self._process_job(job)
-                else:
-                    job.success = True  # Validation-only mode
-
-                job.processing_time = time.time() - job_start
-                self.completed_jobs += 1
-                results["successful_jobs"] += 1
-
-                self.logger.info(f"Job {job.name} completed successfully in {job.processing_time:.2f}s")
-
-            except Exception as e:
-                job.success = False
-                job.error_message = str(e)
-                job.processing_time = time.time() - job_start
-                self.failed_jobs += 1
-                results["failed_jobs"] += 1
-
-                self.logger.error(f"Job {job.name} failed: {e}")
-
-                if not self.config.global_settings.get("continue_on_error", True):
-                    self.logger.error("Stopping batch due to error (continue_on_error=false)")
-                    break
-
-            # Update progress
-            if progress_bar:
-                progress_bar.update(1)
-                progress_bar.set_postfix({
-                    "completed": self.completed_jobs,
-                    "failed": self.failed_jobs
-                })
-
-            # Record job result
-            results["jobs"].append({
-                "name": job.name,
-                "success": job.success,
-                "processing_time": job.processing_time,
-                "keys_processed": job.keys_processed,
-                "error": job.error_message if not job.success else None
-            })
-
-        if progress_bar:
-            progress_bar.close()
-
-        results["total_time"] = time.time() - start_time
-        # Summary report generation disabled
-        # self._generate_summary_report(results)
-
-        return results
-
-    def _process_job(self, job: BatchJob) -> None:
-        """Process a single job"""
-        if not job.model_paths:
-            job.model_paths = [self.models_dir / name for name in job.models]
-        if not isinstance(job.backbone_idx, int):
-            raise ValueError("Validated backbone index is missing")
-
-        # Process based on mode
-        merged_state = None
-
-        if job.mode == "legacy":
-            if job.weights is None:
-                raise ValueError("Legacy mode requires weights")
-            merged_state, _ = stream_weighted_merge_from_paths(
-                job.model_paths, job.weights, job.backbone_idx,
-                only_unet=True,
-                block_multipliers=job.block_multipliers,
-                crossattn_boosts=job.crossattn_boosts
-            )
-
-            # Apply LoRAs if specified
-            if job.loras:
-                for lora_spec in job.loras:
-                    lora_path = self.loras_dir / lora_spec["file"]
-                    scale = lora_spec.get("scale", 0.3)
-                    applied, skipped = apply_single_lora(merged_state, lora_path, scale)
-                    self.logger.info(f"Applied LoRA {lora_spec['file']}: {applied} applied, {skipped} skipped")
-
-        elif job.mode == "perres":
-            if job.assignments is None:
-                raise ValueError("PerRes mode requires assignments")
-            merged_state = merge_perres(
-                job.model_paths, job.assignments, job.backbone_idx, job.attn2_locks
-            )
-            # Apply LoRAs if specified
-            if job.loras:
-                for lora_spec in job.loras:
-                    lora_path = self.loras_dir / lora_spec["file"]
-                    scale = lora_spec.get("scale", 0.3)
-                    applied, skipped = apply_single_lora(merged_state, lora_path, scale)
-                    self.logger.info(f"Applied LoRA {lora_spec['file']}: {applied} applied, {skipped} skipped")
-
-        elif job.mode == "hybrid":
-            if job.hybrid_config is None:
-                raise ValueError("Hybrid mode requires hybrid_config")
-            merged_state = merge_hybrid(
-                job.model_paths, job.hybrid_config, job.backbone_idx, job.attn2_locks
-            )
-            # Apply LoRAs if specified
-            if job.loras:
-                for lora_spec in job.loras:
-                    lora_path = self.loras_dir / lora_spec["file"]
-                    scale = lora_spec.get("scale", 0.3)
-                    applied, skipped = apply_single_lora(merged_state, lora_path, scale)
-                    self.logger.info(f"Applied LoRA {lora_spec['file']}: {applied} applied, {skipped} skipped")
-
-        if merged_state is None:
-            raise ValueError(f"Unsupported mode: {job.mode}")
-
-        output_dir = self.output_dir / self.config.global_settings.get("output_base", "batch_output")
-        output_dir.mkdir(parents=True, exist_ok=True)
-        job.keys_processed = len(merged_state)
-        yaml_kwargs = self._build_yaml_kwargs(job)
-        extra_metadata = {
-            "batch_job": job.name,
-            "description": job.description,
-        }
-        output_path, metadata_folder, version = save_merge_results(
-            output_dir,
-            self.metadata_dir,
-            merged_state,
-            job.models,
-            job.mode,
-            job.backbone_idx,
-            yaml_kwargs,
-            model_paths=job.model_paths,
-            lora_paths=[
-                self.loras_dir / spec["file"]
-                for spec in (job.loras or [])
-            ] or None,
-            output_base_name=job.output_name,
-            extra_metadata=extra_metadata,
-        )
-        job.output_path = output_path
-        job.version = version
-        self.logger.info(f"Saved model to {job.output_path}")
-        self.logger.info(f"Metadata saved to: {metadata_folder.name}/")
-        job.success = True
-
-    def _build_yaml_kwargs(self, job: BatchJob) -> Dict[str, Any]:
-        yaml_kwargs: Dict[str, Any] = {}
-        if job.mode == "legacy":
-            if job.weights:
-                yaml_kwargs["weights"] = job.weights
-            if job.block_multipliers:
-                yaml_kwargs["block_multipliers"] = job.block_multipliers
-            if job.crossattn_boosts:
-                yaml_kwargs["crossattn_boosts"] = job.crossattn_boosts
-        elif job.mode == "perres":
-            if job.assignments:
-                yaml_kwargs["assignments"] = job.assignments
-            if job.attn2_locks:
-                yaml_kwargs["attn2_locks"] = job.attn2_locks
-        elif job.mode == "hybrid":
-            if job.hybrid_config:
-                yaml_kwargs["hybrid_config"] = job.hybrid_config
-            if job.attn2_locks:
-                yaml_kwargs["attn2_locks"] = job.attn2_locks
-
-        if job.loras:
-            yaml_kwargs["loras"] = job.loras
-        return yaml_kwargs
-
-    def _create_audit_log(self, job: BatchJob, meta_embed: Dict[str, str]) -> None:
-        """Create detailed audit log for the job"""
-        config = load_config(root=self.root_dir, reporter=None)
-        app_cfg = config["app"]
-
-        output_name = job.output_path.name if job.output_path else "unknown"
-        log_lines = [
-            f"{app_cfg['tool_name']} V{app_cfg['version']} - Batch Mode - Job: {job.name}",
-            f"Date: {datetime.now().isoformat(timespec='seconds')}",
-            f"Output: {output_name}",
-            "",
-            f"Description: {job.description}",
-            "",
-            f"Mode: {job.mode}",
-            "",
-            "Base models:",
-        ]
-
-        for i, name in enumerate(job.models):
-            marker = " <-- BACKBONE" if i == job.backbone_idx else ""
-            log_lines.append(f"  [{i}] {name}{marker}")
-        log_lines.append("")
-
-        # Mode-specific details
-        if job.mode == "legacy":
-            log_lines.append("Weights:")
-            if job.weights:
-                for name, weight in zip(job.models, job.weights):
-                    log_lines.append(f"  {name}: {weight:.6f}")
-            if job.block_multipliers:
-                log_lines.append("")
-                log_lines.append("Block multipliers:")
-                for name, mults in zip(job.models, job.block_multipliers):
-                    log_lines.append(f"  {name}: down={mults.get('down',1.0):.3f} mid={mults.get('mid',1.0):.3f} up={mults.get('up',1.0):.3f}")
-            if job.loras:
-                log_lines.append("")
-                log_lines.append("Baked LoRAs:")
-                for lora in job.loras:
-                    log_lines.append(f"  {lora['file']}  scale={lora.get('scale', 0.3)}")
-
-        elif job.mode == "perres":
-            log_lines.append("Resolution assignments:")
-            if job.assignments:
-                log_lines.append(f"  Down 0,1: {job.models[job.assignments['down_0_1']]}")
-                log_lines.append(f"  Down 2,3: {job.models[job.assignments['down_2_3']]}")
-                log_lines.append(f"  Mid:      {job.models[job.assignments['mid']]}")
-                log_lines.append(f"  Up 0,1:   {job.models[job.assignments['up_0_1']]}")
-                log_lines.append(f"  Up 2,3:   {job.models[job.assignments['up_2_3']]}")
-            if job.attn2_locks:
-                log_lines.append("")
-                log_lines.append("Cross-attention locks:")
-                for block_name in ["down", "mid", "up"]:
-                    lock_idx = job.attn2_locks.get(block_name)
-                    if lock_idx is None:
-                        continue
-                    log_lines.append(f"  {block_name.capitalize()}: {job.models[lock_idx]}")
-            if job.loras:
-                log_lines.append("")
-                log_lines.append("Baked LoRAs:")
-                for lora in job.loras:
-                    log_lines.append(f"  {lora['file']}  scale={lora.get('scale', 0.3)}")
-
-        elif job.mode == "hybrid":
-            log_lines.append("Hybrid block configuration:")
-            if job.hybrid_config:
-                for block_name, weights in job.hybrid_config.items():
-                    log_lines.append(f"  {block_name}:")
-                    for idx, weight in weights.items():
-                        log_lines.append(f"    {job.models[idx]}: {weight:.3f}")
-            if job.attn2_locks:
-                log_lines.append("")
-                log_lines.append("Cross-attention locks:")
-                for block_name in ["down", "mid", "up"]:
-                    lock_idx = job.attn2_locks.get(block_name)
-                    if lock_idx is None:
-                        continue
-                    log_lines.append(f"  {block_name.capitalize()}: {job.models[lock_idx]}")
-            if job.loras:
-                log_lines.append("")
-                log_lines.append("Baked LoRAs:")
-                for lora in job.loras:
-                    log_lines.append(f"  {lora['file']}  scale={lora.get('scale', 0.3)}")
-
-        log_lines.append("")
-        log_lines.append(f"Total keys: {job.keys_processed}")
-        # Count UNet keys from the actual merged state, not metadata
-        if job.keys_processed > 0:
-            # Estimate UNet keys (typically around 70-80% of total keys in SDXL models)
-            unet_keys = int(job.keys_processed * 0.75)
-        else:
-            unet_keys = 0
-        log_lines.append(f"UNet keys: {unet_keys}")
-
-        # Create structured metadata folder
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        metadata_folder = self.metadata_dir / f"batch_meta_{job.name}_{timestamp}"
-        metadata_folder.mkdir(parents=True, exist_ok=True)
-
-        # 1. Write text audit log
-        audit_txt_path = metadata_folder / "metadata.txt"
-        audit_txt_path.write_text("\n".join(log_lines), encoding="utf-8")
-
-        # 2. Generate and save batch config YAML for recreation
-        from .config import generate_batch_config_yaml
-
-        yaml_params = {
-            'mode': job.mode,
-            'model_names': job.models,
-            'backbone_idx': job.backbone_idx,
-            'version': job.version if job.version is not None else 1
-        }
-
-        # Add mode-specific configurations
-        if job.mode == "legacy":
-            if job.weights:
-                yaml_params['weights'] = job.weights
-            if job.block_multipliers:
-                yaml_params['block_multipliers'] = job.block_multipliers
-            if job.crossattn_boosts:
-                yaml_params['crossattn_boosts'] = job.crossattn_boosts
-            if job.loras:
-                yaml_params['loras'] = job.loras
-        elif job.mode == "perres":
-            if job.assignments:
-                yaml_params['assignments'] = job.assignments
-            if job.attn2_locks:
-                yaml_params['attn2_locks'] = job.attn2_locks
-            if job.loras:
-                yaml_params['loras'] = job.loras
-        elif job.mode == "hybrid":
-            if job.hybrid_config:
-                yaml_params['hybrid_config'] = job.hybrid_config
-            if job.attn2_locks:
-                yaml_params['attn2_locks'] = job.attn2_locks
-            if job.loras:
-                yaml_params['loras'] = job.loras
-
-        try:
-            batch_yaml = generate_batch_config_yaml(**yaml_params)
-            batch_yaml_path = metadata_folder / "batch_config.yaml"
-            batch_yaml_path.write_text(batch_yaml, encoding="utf-8")
-            self.logger.info(f"Metadata saved to: {metadata_folder.name}/")
-        except Exception as e:
-            self.logger.warning(f"Could not generate batch config YAML: {e}")
-            self.logger.info(f"Text metadata saved to: {metadata_folder.name}/metadata.txt")
-
-    def _generate_summary_report(self, results: Dict[str, Any]) -> None:
-        """Generate batch summary report - DISABLED"""
-        return  # Summary report generation disabled
-        summary_path = self.root_dir / f"batch_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-
-        lines = [
-            "="*60,
-            "XLFusion Batch Processing Summary",
-            "="*60,
-            f"Date: {datetime.now().isoformat(timespec='seconds')}",
-            f"Total jobs: {results['total_jobs']}",
-            f"Successful: {results['successful_jobs']}",
-            f"Failed: {results['failed_jobs']}",
-            f"Total time: {results['total_time']:.2f} seconds",
-            f"Average time per job: {results['total_time']/max(results['total_jobs'], 1):.2f} seconds",
-            "",
-            "Job Details:",
-        ]
-
-        for job_result in results["jobs"]:
-            status = "✓ SUCCESS" if job_result["success"] else "✗ FAILED"
-            lines.append(f"  {job_result['name']}: {status} ({job_result['processing_time']:.2f}s)")
-            if not job_result["success"] and job_result["error"]:
-                lines.append(f"    Error: {job_result['error']}")
-
-        lines.append("")
-        lines.append("="*60)
-
-        summary_path.write_text("\n".join(lines), encoding="utf-8")
-        self.logger.info(f"Batch summary saved to: {summary_path}")
-
-
-def load_batch_config(config_path: Path) -> BatchConfig:
-    """Load and parse batch configuration file"""
-    if not YAML_AVAILABLE:
-        raise RuntimeError("PyYAML is required to read batch configuration files.")
-
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            data = yaml.safe_load(f)
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(f"Batch configuration file not found: {config_path}") from exc
-    except yaml.YAMLError as exc:
-        raise ValueError(f"Batch configuration is not valid YAML: {exc}") from exc
-
-    if data is None:
-        data = {}
-    if not isinstance(data, dict):
-        raise ValueError("Batch configuration must contain a top-level mapping")
-
-    # Parse jobs
-    jobs = []
-    for job_data in data.get("batch_jobs", []):
-        # Check if using template
-        if "template" in job_data:
-            template_name = job_data["template"]
-            if template_name not in data.get("templates", {}):
-                raise ValueError(f"Template '{template_name}' not found")
-
-            # Apply template
-            job_data = apply_template(job_data, data["templates"][template_name])
-
-        # Ensure required fields are present
-        if 'mode' not in job_data:
-            raise ValueError(f"Job missing required field 'mode': {job_data.get('name', 'unnamed')}")
-        if 'name' not in job_data:
-            raise ValueError("Job missing required field 'name'")
-        
-        job = BatchJob(**job_data)
-        jobs.append(job)
-
-    return BatchConfig(
-        version=data.get("version", "2.1"),
-        global_settings=data.get("global_settings", {}),
-        batch_jobs=jobs,
-        templates=data.get("templates", {})
-    )
-
-
-def apply_template(job_data: Dict[str, Any], template: Dict[str, Any]) -> Dict[str, Any]:
-    """Apply template configuration to job data"""
-    # Start with template config
-    result = copy.deepcopy(template.get("config_template", {}))
-
-    # Override with job-specific data
-    result.update(job_data)
-
-    # Apply template parameters
-    template_params = job_data.get("template_params", {})
-    default_params = template.get("default_params", {})
-
-    # Merge parameters (job overrides defaults)
-    params = {**default_params, **template_params}
-
-    # Interpolate parameters in config
-    result = interpolate_params(result, params)
-
-    return result
-
-
-def interpolate_params(data: Any, params: Dict[str, Any]) -> Any:
-    """Recursively interpolate parameters in nested data structures with safe numeric evaluation."""
-    def evaluate_numeric_expression(expr: str) -> float:
-        tree = ast.parse(expr, mode="eval")
-
-        def _eval(node: ast.AST) -> float:
-            if isinstance(node, ast.Expression):
-                return _eval(node.body)
-            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-                return float(node.value)
-            if isinstance(node, ast.Name):
-                if node.id not in params:
-                    raise ValueError(f"Unknown parameter '{node.id}'")
-                value = params[node.id]
-                if isinstance(value, bool) or not isinstance(value, (int, float)):
-                    raise ValueError(f"Parameter '{node.id}' is not numeric")
-                return float(value)
-            if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
-                operand = _eval(node.operand)
-                return operand if isinstance(node.op, ast.UAdd) else -operand
-            if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
-                left = _eval(node.left)
-                right = _eval(node.right)
-                if isinstance(node.op, ast.Add):
-                    return left + right
-                if isinstance(node.op, ast.Sub):
-                    return left - right
-                if isinstance(node.op, ast.Mult):
-                    return left * right
-                return left / right
-            raise ValueError("Unsupported template expression")
-
-        return _eval(tree)
-
-    if isinstance(data, str):
-        import re
-        pattern = r'\{\{([^}]+)\}\}'
-        exact_match = re.fullmatch(pattern, data.strip())
-        if exact_match:
-            expr = exact_match.group(1).strip()
-            if expr in params:
-                return params[expr]
-            try:
-                return evaluate_numeric_expression(expr)
-            except Exception:
-                return data
-
-        def replace_expression(match: re.Match[str]) -> str:
-            expr = match.group(1).strip()
-            if expr in params:
-                return str(params[expr])
-            try:
-                return str(evaluate_numeric_expression(expr))
-            except Exception:
-                return match.group(0)
-
-        return re.sub(pattern, replace_expression, data)
-    elif isinstance(data, dict):
-        return {k: interpolate_params(v, params) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [interpolate_params(item, params) for item in data]
-    else:
-        return data
-
-
-def main():
-    """Command line interface for batch processing"""
+from .batch_runner import BatchProcessor
+from .batch_schema import (
+    BatchConfig,
+    BatchJob,
+    BatchValidator,
+    apply_template,
+    interpolate_params,
+    load_batch_config,
+)
+from .config import resolve_app_context
+
+
+def main() -> int:
+    """Command line interface for batch processing."""
     import argparse
 
     parser = argparse.ArgumentParser(description="XLFusion batch processor")
     parser.add_argument("config", type=Path, help="Batch configuration file")
     parser.add_argument("--validate-only", action="store_true", help="Only validate configuration, don't process")
     parser.add_argument("--template", help="Use specific template (overrides job templates)")
-
     args = parser.parse_args()
 
     if not args.config.exists():
@@ -724,31 +31,23 @@ def main():
         return 1
 
     try:
-        # Load configuration
         config = load_batch_config(args.config)
 
-        # Override template if specified
         if args.template:
             if args.template not in config.templates:
                 print(f"Error: Template '{args.template}' not found in configuration")
                 return 1
-            
+
             template = config.templates[args.template]
             for job in config.batch_jobs:
-                # Apply the template to each job
-                job_data = job.__dict__.copy()
-                job_data = apply_template(job_data, template)
-                
-                # Update job with new configuration
+                job_data = apply_template(job.__dict__.copy(), template)
                 for key, value in job_data.items():
                     if hasattr(job, key):
                         setattr(job, key, value)
-                
                 job.template = args.template
 
-        # Validate configuration
-        root_dir = Path(__file__).resolve().parent.parent
-        validator = BatchValidator(root_dir)
+        context = resolve_app_context(Path(__file__).resolve().parent.parent)
+        validator = BatchValidator(context)
         is_valid = validator.validate_config(config)
 
         if validator.errors:
@@ -769,23 +68,30 @@ def main():
             print("Configuration validation successful!")
             return 0
 
-        # Process batch
-        processor = BatchProcessor(config, root_dir, validate_only=args.validate_only)
+        processor = BatchProcessor(config, context, validate_only=args.validate_only)
         results = processor.process_batch()
 
-        # Print summary
-        print(f"\nBatch processing completed!")
+        print("\nBatch processing completed!")
         print(f"Total jobs: {results['total_jobs']}")
         print(f"Successful: {results['successful_jobs']}")
         print(f"Failed: {results['failed_jobs']}")
-        print(f"Total time: {results['total_time']:.2f} seconds")
-
-        return 0 if results['failed_jobs'] == 0 else 1
-
-    except Exception as e:
-        print(f"Error: {e}")
+        return 0 if results["failed_jobs"] == 0 else 1
+    except Exception as exc:
+        print(f"Error: {exc}")
         return 1
 
 
+__all__ = [
+    "BatchConfig",
+    "BatchJob",
+    "BatchProcessor",
+    "BatchValidator",
+    "apply_template",
+    "interpolate_params",
+    "load_batch_config",
+    "main",
+]
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

@@ -11,10 +11,10 @@ from .config import generate_batch_config_yaml, load_config, next_version_path
 from .memory import save_state
 
 
-def _build_metadata_header(version: str, mode: str, model_names: Iterable[str]) -> str:
+def _build_metadata_header(mode: str, model_names: Iterable[str]) -> str:
     """Generate a human-readable header for metadata.txt."""
     lines = [
-        f"XLFusion V{version} - Merge Metadata",
+        "XLFusion - Merge Metadata",
         "=" * 50,
         "",
         f"Mode: {mode}",
@@ -71,7 +71,6 @@ def save_merge_results(
         "models": ",".join(model_names),
         "mode": mode,
         "tool": config["app"]["tool_name"],
-        "version": config["app"]["version"],
         "timestamp": str(time.time()),
     }
     if extra_metadata:
@@ -84,7 +83,7 @@ def save_merge_results(
 
     metadata_txt_path = metadata_folder / "metadata.txt"
     with open(metadata_txt_path, "w", encoding="utf-8") as fh:
-        fh.write(_build_metadata_header(config["app"]["version"], mode, model_names))
+        fh.write(_build_metadata_header(mode, model_names))
         fh.write(f"Output: {output_path.name}\n")
         fh.write(f"Backbone: {model_names[backbone_idx]} (idx {backbone_idx})\n")
         fh.write(f"Timestamp: {meta['timestamp']}\n")

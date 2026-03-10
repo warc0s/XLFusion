@@ -37,7 +37,7 @@ class ConfigLoadingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             messages = []
             config = load_config(root=Path(tmp), reporter=messages.append)
-            self.assertEqual(config["app"]["version"], "2.15")
+            self.assertEqual(config["app"]["tool_name"], "XLFusion")
             self.assertEqual(config["directories"]["models"], "workspace/models")
             self.assertTrue(any("config.yaml not found" in message for message in messages))
 
@@ -139,7 +139,7 @@ class BatchConfigLoadTests(unittest.TestCase):
     def test_invalid_batch_yaml_raises_clear_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "broken.yaml"
-            path.write_text("version: [bad\n", encoding="utf-8")
+            path.write_text("global_settings: [bad\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "not valid YAML"):
                 load_batch_config(path)
 
