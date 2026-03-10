@@ -15,6 +15,7 @@ except ImportError:
 
 from .batch_schema import BatchConfig, BatchJob
 from .config import AppContext, resolve_app_context
+from .execution import execution_options_to_dict
 from .lora import apply_single_lora
 from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
 from .validation import format_preflight_plan
@@ -60,7 +61,7 @@ class BatchProcessor:
         }
 
         progress_bar = None
-        if TQDM_AVAILABLE and not self.validate_only:
+        if TQDM_AVAILABLE and not self.validate_only and sys.stderr.isatty():
             progress_bar = tqdm(total=self.total_jobs, desc="Batch Progress", unit="job")
 
         for job in self.config.batch_jobs:
@@ -92,6 +93,11 @@ class BatchProcessor:
             if progress_bar:
                 progress_bar.update(1)
                 progress_bar.set_postfix({"completed": self.completed_jobs, "failed": self.failed_jobs})
+            elif not self.validate_only:
+                self.logger.info(
+                    f"Batch progress: {self.completed_jobs + self.failed_jobs}/{self.total_jobs} "
+                    f"(ok={self.completed_jobs}, failed={self.failed_jobs})"
+                )
 
             results["jobs"].append(
                 {
@@ -137,6 +143,9 @@ class BatchProcessor:
             lora_paths=[self.context.loras_dir / spec["file"] for spec in (job.loras or [])] or None,
             output_base_name=job.output_name,
             extra_metadata={"batch_job": job.name, "description": job.description},
+            execution=execution_options_to_dict(job.execution),
+            job_name=job.name,
+            job_description=job.description,
         )
         job.output_path = output_path
         job.version = version
@@ -155,18 +164,31 @@ class BatchProcessor:
                 only_unet=True,
                 block_multipliers=job.block_multipliers,
                 crossattn_boosts=job.crossattn_boosts,
+                execution=job.execution,
             )
             return merged_state
 
         if job.mode == "perres":
             if job.assignments is None:
                 raise ValueError("PerRes mode requires assignments")
-            return merge_perres(job.model_paths, job.assignments, job.backbone_idx, job.attn2_locks)
+            return merge_perres(
+                job.model_paths,
+                job.assignments,
+                job.backbone_idx,
+                job.attn2_locks,
+                execution=job.execution,
+            )
 
         if job.mode == "hybrid":
             if job.hybrid_config is None:
                 raise ValueError("Hybrid mode requires hybrid_config")
-            return merge_hybrid(job.model_paths, job.hybrid_config, job.backbone_idx, job.attn2_locks)
+            return merge_hybrid(
+                job.model_paths,
+                job.hybrid_config,
+                job.backbone_idx,
+                job.attn2_locks,
+                execution=job.execution,
+            )
 
         return None
 
@@ -203,4 +225,6 @@ class BatchProcessor:
 
         if job.loras:
             yaml_kwargs["loras"] = job.loras
+        if job.execution:
+            yaml_kwargs["execution"] = execution_options_to_dict(job.execution)
         return yaml_kwargs

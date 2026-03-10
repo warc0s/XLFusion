@@ -43,6 +43,31 @@ class ProgressCancelTests(unittest.TestCase):
             # Al menos tantas ticks como claves del backbone (pueden añadirse más por otras claves)
             self.assertGreaterEqual(seen["ticks"], seen["total"])
 
+    def test_low_memory_and_standard_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            m1 = tmp / "m1.safetensors"
+            m2 = tmp / "m2.safetensors"
+            st_save(_make_small_state(1.0), str(m1))
+            st_save(_make_small_state(3.0), str(m2))
+
+            merged_standard, _ = stream_weighted_merge_from_paths(
+                [m1, m2],
+                [0.25, 0.75],
+                base_idx=0,
+                execution={"mode": "standard", "progress": "quiet"},
+            )
+            merged_low_memory, _ = stream_weighted_merge_from_paths(
+                [m1, m2],
+                [0.25, 0.75],
+                base_idx=0,
+                execution={"mode": "low-memory", "progress": "quiet"},
+            )
+
+            self.assertEqual(set(merged_standard.keys()), set(merged_low_memory.keys()))
+            for key in merged_standard:
+                self.assertTrue(torch.allclose(merged_standard[key], merged_low_memory[key], atol=1e-6))
+
     def test_cancel_hybrid(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)

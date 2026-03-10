@@ -10,7 +10,6 @@ from typing import Callable, Dict, List, Optional, Tuple
 import torch
 from contextlib import ExitStack
 from safetensors.torch import safe_open
-from tqdm import tqdm
 import threading
 
 from .blocks import (
@@ -20,12 +19,36 @@ from .blocks import (
     get_attn2_block_type,
     group_for_key,
 )
+from .execution import ProgressReporter, build_processing_order, normalize_execution_options
 from .memory import estimate_memory_requirement, check_memory_availability
 
 
 class MergeCancelled(Exception):
     """Signal to cancel an ongoing merge process"""
     pass
+
+
+def _accumulation_dtype_for(tensor: torch.Tensor) -> torch.dtype:
+    if tensor.dtype == torch.float64:
+        return torch.float64
+    return torch.float32
+
+
+def _prepare_tensor_for_merge(tensor: torch.Tensor, device: str) -> Tuple[torch.Tensor, torch.dtype]:
+    reference_dtype = tensor.dtype
+    if device != "cpu":
+        tensor = tensor.to(device)
+    if tensor.dtype.is_floating_point:
+        tensor = tensor.to(_accumulation_dtype_for(tensor))
+    else:
+        tensor = tensor.to(torch.float32)
+    return tensor, reference_dtype
+
+
+def _finalize_tensor_dtype(tensor: torch.Tensor, reference_dtype: torch.dtype) -> torch.Tensor:
+    if tensor.dtype != reference_dtype:
+        tensor = tensor.to(reference_dtype)
+    return tensor
 
 
 def validate_hybrid_config(hybrid_config: Dict, model_count: int) -> List[str]:
@@ -96,6 +119,7 @@ def merge_hybrid(
     backbone_idx: int,
     attn2_locks: Optional[Dict[str, int]] = None,  # {"down": 0, "mid": 1, "up": 2}
     *,
+    execution: Optional[Dict[str, object]] = None,
     progress_cb: Optional[Callable[[str, int], None]] = None,
     cancel_event: Optional[threading.Event] = None,
     cancel_every: int = 1,
@@ -108,7 +132,8 @@ def merge_hybrid(
     - Secondary models share remaining weight
     - Cross-attention locks supported
     """
-    print("\nStarting Hybrid fusion...")
+    execution_options = normalize_execution_options(execution)
+    print(f"\nStarting Hybrid fusion ({execution_options.mode})...")
 
     warnings = validate_hybrid_config(hybrid_config, len(model_paths))
     if warnings:
@@ -179,70 +204,75 @@ def merge_hybrid(
 
         base_handle = handles[backbone_idx]
         base_keys = list(base_handle.keys())
-        if progress_cb:
-            try:
-                progress_cb("total", len(base_keys))
-            except Exception:
-                pass
+        ordered_keys = build_processing_order(
+            base_keys,
+            key_sets.values(),
+            sort_keys=execution_options.sort_keys,
+        )
 
         processed = 0
 
-        def _tick() -> None:
+        def _tick(reporter: ProgressReporter) -> None:
             nonlocal processed
             processed += 1
-            if progress_cb:
-                try:
-                    progress_cb("tick", 1)
-                except Exception:
-                    pass
+            reporter.step(1)
             if cancel_event and (processed % max(1, cancel_every) == 0) and cancel_event.is_set():
                 raise MergeCancelled("Merge cancelled by the user")
 
-        for key in tqdm(base_keys, desc="Hybrid merge", unit="tensor"):
-            if not key.startswith(UNET_PREFIX):
-                merged[key] = to_cpu(base_handle.get_tensor(key))
-                _tick()
-                continue
-
-            if attn2_locks and is_cross_attn_key(key):
-                block_type = get_attn2_block_type(key)
-                if block_type and block_type in attn2_locks:
-                    lock_idx = attn2_locks[block_type]
-                    handle = handles.get(lock_idx)
-                    if handle and key in key_sets.get(lock_idx, set()):
-                        merged[key] = to_cpu(handle.get_tensor(key))
-                        stats["attn2_locks"] += 1
-                        _tick()
-                        continue
-
-            block_group = get_block_assignment(key)
-
-            if block_group and block_group in normalized_config:
-                weighted_sum: Optional[torch.Tensor] = None
-                total_weight = 0.0
-                for model_idx, weight in normalized_config[block_group].items():
-                    handle = handles.get(model_idx)
-                    if handle is None or key not in key_sets.get(model_idx, set()):
-                        continue
-                    tensor = handle.get_tensor(key)
-                    contribution = tensor * weight
-                    if weighted_sum is None:
-                        weighted_sum = contribution
-                    else:
-                        weighted_sum += contribution
-                    total_weight += weight
-
-                if weighted_sum is not None and total_weight > 0.0:
-                    if abs(total_weight - 1.0) > 1e-6:
-                        weighted_sum = weighted_sum / total_weight
-                    merged[key] = to_cpu(weighted_sum)
-                    stats[block_group] += 1
-                    _tick()
+        with ProgressReporter(len(ordered_keys), "Hybrid merge", execution_options, progress_cb=progress_cb) as reporter:
+            for key in ordered_keys:
+                if not key.startswith(UNET_PREFIX):
+                    if key in key_sets.get(backbone_idx, set()):
+                        merged[key] = to_cpu(base_handle.get_tensor(key))
+                    _tick(reporter)
                     continue
 
-            merged[key] = to_cpu(base_handle.get_tensor(key))
-            stats["other"] += 1
-            _tick()
+                if attn2_locks and is_cross_attn_key(key):
+                    block_type = get_attn2_block_type(key)
+                    if block_type and block_type in attn2_locks:
+                        lock_idx = attn2_locks[block_type]
+                        handle = handles.get(lock_idx)
+                        if handle and key in key_sets.get(lock_idx, set()):
+                            merged[key] = to_cpu(handle.get_tensor(key))
+                            stats["attn2_locks"] += 1
+                            _tick(reporter)
+                            continue
+
+                block_group = get_block_assignment(key)
+
+                if block_group and block_group in normalized_config:
+                    weighted_sum: Optional[torch.Tensor] = None
+                    total_weight = 0.0
+                    reference_dtype: Optional[torch.dtype] = None
+                    for model_idx, weight in normalized_config[block_group].items():
+                        handle = handles.get(model_idx)
+                        if handle is None or key not in key_sets.get(model_idx, set()):
+                            continue
+                        tensor = handle.get_tensor(key)
+                        tensor, tensor_dtype = _prepare_tensor_for_merge(tensor, "cpu")
+                        if reference_dtype is None:
+                            reference_dtype = tensor_dtype
+                        contribution = tensor * weight
+                        if weighted_sum is None:
+                            weighted_sum = contribution
+                        else:
+                            weighted_sum += contribution
+                        total_weight += weight
+
+                    if weighted_sum is not None and total_weight > 0.0:
+                        if abs(total_weight - 1.0) > 1e-6:
+                            weighted_sum = weighted_sum / total_weight
+                        if reference_dtype is not None:
+                            weighted_sum = _finalize_tensor_dtype(weighted_sum, reference_dtype)
+                        merged[key] = to_cpu(weighted_sum)
+                        stats[block_group] += 1
+                        _tick(reporter)
+                        continue
+
+                if key in key_sets.get(backbone_idx, set()):
+                    merged[key] = to_cpu(base_handle.get_tensor(key))
+                    stats["other"] += 1
+                _tick(reporter)
 
     gc.collect()
 
@@ -260,6 +290,7 @@ def merge_perres(
     backbone_idx: int,
     attn2_locks: Optional[Dict[str, int]] = None,  # {"down": 0, "mid": 1, "up": 2}
     *,
+    execution: Optional[Dict[str, object]] = None,
     progress_cb: Optional[Callable[[str, int], None]] = None,
     cancel_event: Optional[threading.Event] = None,
     cancel_every: int = 1,
@@ -267,7 +298,8 @@ def merge_perres(
     """
     PerRes mode fusion: 100% assignment by block pairs based on resolution.
     """
-    print("\nStarting PerRes fusion...")
+    execution_options = normalize_execution_options(execution)
+    print(f"\nStarting PerRes fusion ({execution_options.mode})...")
 
     # Memory check
     needed_indices = set(assignments.values())
@@ -307,56 +339,55 @@ def merge_perres(
 
         base_handle = handles[backbone_idx]
         base_keys = list(base_handle.keys())
-        if progress_cb:
-            try:
-                progress_cb("total", len(base_keys))
-            except Exception:
-                pass
+        ordered_keys = build_processing_order(
+            base_keys,
+            key_sets.values(),
+            sort_keys=execution_options.sort_keys,
+        )
 
         processed = 0
 
-        def _tick() -> None:
+        def _tick(reporter: ProgressReporter) -> None:
             nonlocal processed
             processed += 1
-            if progress_cb:
-                try:
-                    progress_cb("tick", 1)
-                except Exception:
-                    pass
+            reporter.step(1)
             if cancel_event and (processed % max(1, cancel_every) == 0) and cancel_event.is_set():
                 raise MergeCancelled("Merge cancelled by the user")
 
-        for key in tqdm(base_keys, desc="PerRes merge", unit="tensor"):
-            if not key.startswith(UNET_PREFIX):
-                merged[key] = to_cpu(base_handle.get_tensor(key))
-                _tick()
-                continue
-
-            if attn2_locks and is_cross_attn_key(key):
-                block_type = get_attn2_block_type(key)
-                if block_type and block_type in attn2_locks:
-                    lock_idx = attn2_locks[block_type]
-                    handle = handles.get(lock_idx)
-                    if handle and key in key_sets.get(lock_idx, set()):
-                        merged[key] = to_cpu(handle.get_tensor(key))
-                        stats["attn2_locks"] += 1
-                        _tick()
-                        continue
-
-            block_group = get_block_assignment(key)
-
-            if block_group and block_group in assignments:
-                model_idx = assignments[block_group]
-                handle = handles.get(model_idx)
-                if handle and key in key_sets.get(model_idx, set()):
-                    merged[key] = to_cpu(handle.get_tensor(key))
-                    stats[block_group] += 1
-                    _tick()
+        with ProgressReporter(len(ordered_keys), "PerRes merge", execution_options, progress_cb=progress_cb) as reporter:
+            for key in ordered_keys:
+                if not key.startswith(UNET_PREFIX):
+                    if key in key_sets.get(backbone_idx, set()):
+                        merged[key] = to_cpu(base_handle.get_tensor(key))
+                    _tick(reporter)
                     continue
 
-            merged[key] = to_cpu(base_handle.get_tensor(key))
-            stats["other"] += 1
-            _tick()
+                if attn2_locks and is_cross_attn_key(key):
+                    block_type = get_attn2_block_type(key)
+                    if block_type and block_type in attn2_locks:
+                        lock_idx = attn2_locks[block_type]
+                        handle = handles.get(lock_idx)
+                        if handle and key in key_sets.get(lock_idx, set()):
+                            merged[key] = to_cpu(handle.get_tensor(key))
+                            stats["attn2_locks"] += 1
+                            _tick(reporter)
+                            continue
+
+                block_group = get_block_assignment(key)
+
+                if block_group and block_group in assignments:
+                    model_idx = assignments[block_group]
+                    handle = handles.get(model_idx)
+                    if handle and key in key_sets.get(model_idx, set()):
+                        merged[key] = to_cpu(handle.get_tensor(key))
+                        stats[block_group] += 1
+                        _tick(reporter)
+                        continue
+
+                if key in key_sets.get(backbone_idx, set()):
+                    merged[key] = to_cpu(base_handle.get_tensor(key))
+                    stats["other"] += 1
+                _tick(reporter)
 
     gc.collect()
 
@@ -377,6 +408,7 @@ def stream_weighted_merge_from_paths(
     only_unet: bool = True,
     block_multipliers: Optional[List[Dict[str, float]]] = None,  # per-model {down, mid, up}
     crossattn_boosts: Optional[List[Dict[str, float]]] = None,   # per-model {down, mid, up}
+    execution: Optional[Dict[str, object]] = None,
     progress_cb: Optional[Callable[[str, int], None]] = None,
     cancel_event: Optional[threading.Event] = None,
     cancel_every: int = 1,
@@ -387,7 +419,8 @@ def stream_weighted_merge_from_paths(
 
     Returns (merged_state, stats)
     """
-    print("\nStarting Legacy weighted merge...")
+    execution_options = normalize_execution_options(execution)
+    print(f"\nStarting Legacy weighted merge ({execution_options.mode})...")
     
     # Normalize weights
     total = sum(weights)
@@ -422,13 +455,12 @@ def stream_weighted_merge_from_paths(
             raise IndexError(f"Base index {base_idx} is out of range for {len(handles)} models")
 
         base_keys = list(handles[base_idx].keys())
-        if progress_cb:
-            try:
-                progress_cb("total", len(base_keys))
-            except Exception:
-                pass
+        ordered_keys = build_processing_order(
+            base_keys,
+            key_sets,
+            sort_keys=execution_options.sort_keys,
+        )
         merged: Dict[str, torch.Tensor] = {}
-        seen = set()
 
         processed = 0
 
@@ -442,6 +474,7 @@ def stream_weighted_merge_from_paths(
 
             weighted_sum: Optional[torch.Tensor] = None
             active_weight = 0.0
+            reference_dtype: Optional[torch.dtype] = None
 
             for i, (handle, weight, keys) in enumerate(zip(handles, weights, key_sets)):
                 if weight == 0.0 or key not in keys:
@@ -466,7 +499,9 @@ def stream_weighted_merge_from_paths(
                         pass
 
                 tensor = handle.get_tensor(key)
-                tensor = tensor.to(device)
+                tensor, tensor_dtype = _prepare_tensor_for_merge(tensor, device)
+                if reference_dtype is None:
+                    reference_dtype = tensor_dtype
                 contribution = tensor * eff_weight
                 if weighted_sum is None:
                     weighted_sum = contribution
@@ -477,6 +512,8 @@ def stream_weighted_merge_from_paths(
             if weighted_sum is not None and active_weight > 0.0:
                 if abs(active_weight - 1.0) > 1e-6:
                     weighted_sum = weighted_sum / active_weight
+                if reference_dtype is not None:
+                    weighted_sum = _finalize_tensor_dtype(weighted_sum, reference_dtype)
                 merged[key] = to_cpu_if_needed(weighted_sum)
                 stats[group] = stats.get(group, 0) + 1
             else:
@@ -484,25 +521,13 @@ def stream_weighted_merge_from_paths(
                     fallback = handles[base_idx].get_tensor(key)
                     merged[key] = to_cpu_if_needed(fallback.to(device))
                     stats[group] = stats.get(group, 0) + 1
-            if progress_cb:
-                try:
-                    progress_cb("tick", 1)
-                except Exception:
-                    pass
-
-        for key in tqdm(base_keys, desc="Legacy merge", unit="tensor"):
-            process_key(key)
-            processed += 1
-            if cancel_event and (processed % max(1, cancel_every) == 0) and cancel_event.is_set():
-                raise MergeCancelled("Merge cancelled by the user")
-            seen.add(key)
-
-        # Include keys that exist only in non-base models
-        for keys in key_sets:
-            for key in keys:
-                if key not in seen:
-                    process_key(key)
-                    seen.add(key)
+        with ProgressReporter(len(ordered_keys), "Legacy merge", execution_options, progress_cb=progress_cb) as reporter:
+            for key in ordered_keys:
+                process_key(key)
+                processed += 1
+                reporter.step(1)
+                if cancel_event and (processed % max(1, cancel_every) == 0) and cancel_event.is_set():
+                    raise MergeCancelled("Merge cancelled by the user")
 
     gc.collect()
     return merged, stats

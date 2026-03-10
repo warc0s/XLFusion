@@ -30,6 +30,7 @@ class AppContext:
     loras_dir: Path
     output_dir: Path
     metadata_dir: Path
+    presets_dir: Path
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "model_output": {
@@ -45,6 +46,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "loras": "workspace/loras",
         "output": "workspace/output",
         "metadata": "workspace/metadata",
+        "presets": "workspace/presets",
     },
     "merge_defaults": {
         "legacy": {
@@ -218,9 +220,10 @@ def resolve_app_context(
     loras_dir = root_dir / dirs["loras"]
     output_dir = root_dir / dirs["output"]
     metadata_dir = root_dir / dirs["metadata"]
+    presets_dir = root_dir / dirs["presets"]
 
     if create_dirs:
-        for path in (models_dir, loras_dir, output_dir, metadata_dir):
+        for path in (models_dir, loras_dir, output_dir, metadata_dir, presets_dir):
             path.mkdir(parents=True, exist_ok=True)
 
     return AppContext(
@@ -230,6 +233,7 @@ def resolve_app_context(
         loras_dir=loras_dir,
         output_dir=output_dir,
         metadata_dir=metadata_dir,
+        presets_dir=presets_dir,
     )
 
 
@@ -271,6 +275,11 @@ def generate_batch_config_yaml(
     model_names: List[str],
     backbone_idx: int,
     version: int,
+    *,
+    job_name: Optional[str] = None,
+    job_description: str = "Recreated from metadata backup",
+    output_name: Optional[str] = None,
+    execution: Optional[Dict[str, Any]] = None,
     weights: Optional[List[float]] = None,
     assignments: Optional[Dict[str, Any]] = None,
     hybrid_config: Optional[Dict[str, Any]] = None,
@@ -294,13 +303,16 @@ def generate_batch_config_yaml(
     }
 
     job = {
-        "name": f"Recreated_Model_V{version}",
+        "name": job_name or f"Recreated_Model_V{version}",
         "mode": mode,
-        "description": "Recreated from metadata backup",
+        "description": job_description,
         "models": model_names,
         "backbone": backbone_idx,
-        "output_name": f"Recreated_V{version}",
+        "output_name": output_name or f"Recreated_V{version}",
     }
+
+    if execution:
+        job["execution"] = execution
 
     if mode == "legacy":
         if weights is not None:

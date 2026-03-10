@@ -31,6 +31,13 @@ def _blake2b_file(path: Path, digest_size: int = 16) -> str:
     return h.hexdigest()
 
 
+def _derive_output_base_name(output_path: Path) -> str:
+    stem = output_path.stem
+    if "_V" in stem:
+        return stem.rsplit("_V", 1)[0]
+    return stem
+
+
 def save_merge_results(
     output_dir: Path,
     metadata_dir: Path,
@@ -44,6 +51,9 @@ def save_merge_results(
     lora_paths: Optional[List[Path]] = None,
     output_base_name: Optional[str] = None,
     extra_metadata: Optional[Dict[str, str]] = None,
+    execution: Optional[Dict[str, Any]] = None,
+    job_name: Optional[str] = None,
+    job_description: Optional[str] = None,
 ) -> Tuple[Path, Path, int]:
     """Unified persistence of the merged model and auxiliary files.
 
@@ -117,12 +127,20 @@ def save_merge_results(
             fh.write("\nConfiguration (kwargs):\n")
             for k, v in yaml_kwargs.items():
                 fh.write(f"  {k}: {v}\n")
+        if execution:
+            fh.write("\nExecution:\n")
+            for k, v in execution.items():
+                fh.write(f"  {k}: {v}\n")
 
     yaml_params = {
         "mode": mode,
         "model_names": model_names,
         "backbone_idx": backbone_idx,
         "version": version,
+        "job_name": job_name,
+        "job_description": job_description or "Recreated from metadata backup",
+        "output_name": output_base_name or _derive_output_base_name(output_path),
+        "execution": execution,
     }
     yaml_params.update(yaml_kwargs)
 

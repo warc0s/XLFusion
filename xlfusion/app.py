@@ -31,15 +31,24 @@ from .cli import (
     pick_backbone,
     prompt_block_merge,
     prompt_crossattn_boost,
+    prompt_execution_options,
     prompt_hybrid_config,
     prompt_loras,
+    prompt_output_name,
     prompt_perres_assignments,
     prompt_select,
     prompt_weights,
 )
 from .config import list_safetensors, resolve_app_context
+from .execution import execution_options_to_dict
 from .lora import apply_single_lora
 from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
+from .presets import (
+    batch_job_to_runtime_state,
+    inspect_recovery_source,
+    load_single_job_preset,
+    save_single_job_preset,
+)
 from .validation import export_preflight_plan, format_preflight_plan, validate_merge_request
 from .workflow import save_merge_results
 
@@ -178,6 +187,9 @@ def main() -> int:
     parser.add_argument("--recommend", choices=['style_transfer', 'detail_enhance', 'balanced'], help="Generate recommendations for fusion goal")
     parser.add_argument("--export-analysis", type=Path, metavar='PATH', help="Export analysis to JSON file")
     parser.add_argument("--gui", action="store_true", help="Launch graphical interface")
+    parser.add_argument("--recover-metadata", type=Path, help="Inspect a metadata folder and reconstruct its batch job")
+    parser.add_argument("--export-recovered", type=Path, metavar="PATH", help="Save the recovered batch YAML to a new path")
+    parser.add_argument("--run-recovered", action="store_true", help="Execute the recovered batch job after inspection")
 
     args = parser.parse_args()
 
@@ -190,11 +202,66 @@ def main() -> int:
     metadata_dir = context.metadata_dir
 
     if args.gui:
-        if any([args.batch, args.analyze, args.compare, args.recommend]):
+        if any([args.batch, args.analyze, args.compare, args.recommend, args.recover_metadata]):
             print("The --gui option cannot be combined with batch or analysis modes.")
             return 1
         from .gui_app import launch_gui
         launch_gui(root)
+        return 0
+
+    if args.recover_metadata:
+        if args.batch or args.analyze or args.compare or args.recommend:
+            print("The recovery flow cannot be combined with batch or analysis modes.")
+            return 1
+        try:
+            inspection = inspect_recovery_source(args.recover_metadata, context)
+        except Exception as exc:
+            print(f"Error: {exc}")
+            return 1
+
+        print("\nRecovered metadata")
+        print("=" * 60)
+        print(f"Folder: {inspection.metadata_folder}")
+        print(f"Batch config: {inspection.batch_config_path}")
+        print(f"Job: {inspection.job.name}")
+        print(f"Mode: {inspection.job.mode}")
+        print(f"Models: {', '.join(inspection.job.models)}")
+        print(f"Output name: {inspection.job.output_name or 'default'}")
+        if inspection.missing_models:
+            print(f"Missing models: {', '.join(inspection.missing_models)}")
+        if inspection.missing_loras:
+            print(f"Missing LoRAs: {', '.join(inspection.missing_loras)}")
+        for warning in inspection.warnings:
+            print(f"  WARNING: {warning}")
+
+        if args.export_recovered:
+            args.export_recovered.write_text(
+                inspection.batch_config_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            print(f"Recovered YAML exported to: {args.export_recovered}")
+
+        if args.run_recovered:
+            from .batch_processor import BatchProcessor, BatchValidator, load_batch_config
+            try:
+                recovered_config = load_batch_config(inspection.batch_config_path)
+            except Exception as exc:
+                print(f"Error: could not load recovered batch config: {exc}")
+                return 1
+
+            validator = BatchValidator(context)
+            if not validator.validate_config(recovered_config):
+                print("Recovered configuration validation failed:")
+                for error in validator.errors:
+                    print(f"  ERROR: {error}")
+                for warning in validator.warnings:
+                    print(f"  WARNING: {warning}")
+                return 1
+
+            processor = BatchProcessor(recovered_config, context, validate_only=False)
+            results = processor.process_batch()
+            return 0 if results["failed_jobs"] == 0 else 1
+
         return 0
 
     # Check for analysis mode
@@ -238,36 +305,14 @@ def main() -> int:
     print(f"  output:   {output_dir}")
     print(f"  metadata: {metadata_dir}")
 
-    # Select models
     model_files = list_safetensors(models_dir)
     if not model_files:
         print(f"\nNo .safetensors files found in {models_dir}")
         return 1
 
-    model_idx = prompt_select(model_files, "Select models to merge (comma-separated indices):", [0, 1])
-    if len(model_idx) < 2:
-        print("\nSelect at least 2 models")
-        return 1
-
-    model_paths = [model_files[i] for i in model_idx]
-    model_names = [p.name for p in model_paths]
-
-    # Select fusion mode
-    print("\nSelect fusion mode:")
-    print("  [0] Legacy - Classic weighted merge")
-    print("  [1] PerRes - Resolution-based block control")
-    print("  [2] Hybrid - Combines PerRes assignment with weighted blending")
-    
-    mode_choice = input("Enter mode [0]: ").strip()
-    if not mode_choice:
-        mode_choice = "0"
-    
-    try:
-        mode = int(mode_choice)
-        if mode not in [0, 1, 2]:
-            mode = 0
-    except ValueError:
-        mode = 0
+    default_output_name = context.config["model_output"]["base_name"]
+    execution_options = execution_options_to_dict(None)
+    output_base_name = default_output_name
 
     weights: List[float] = []
     block_weights = None
@@ -277,24 +322,104 @@ def main() -> int:
     hybrid_config = None
     lora_selections = []
 
-    # Collect configuration first; execution only starts after validation + preflight
-    if mode == 0:  # Legacy
-        weights = prompt_weights(model_names, [0.7, 0.3] + [0.0] * (len(model_names) - 2))
-        backbone_idx = pick_backbone(model_names, weights)
-        block_weights = prompt_block_merge(model_names)
-        crossattn_boosts = prompt_crossattn_boost(model_names)
-    elif mode == 1:  # PerRes
-        assignments, attn2_locks = prompt_perres_assignments(model_names)
-        backbone_idx = list(assignments.values())[0]
-    else:  # Hybrid
-        hybrid_config, attn2_locks = prompt_hybrid_config(model_names)
-        backbone_idx = 0
+    preset_source = input("\nLoad preset YAML or metadata folder [Enter to skip]: ").strip()
+    loaded_runtime = None
+    if preset_source:
+        preset_path = Path(preset_source)
+        try:
+            if preset_path.is_dir():
+                preset_path = inspect_recovery_source(preset_path, context).batch_config_path
+            loaded_job = load_single_job_preset(preset_path)
+            loaded_runtime = batch_job_to_runtime_state(loaded_job)
+        except Exception as exc:
+            print(f"Error loading preset: {exc}")
+            return 1
 
-    lora_files = list_safetensors(loras_dir)
-    if lora_files:
-        lora_selections = prompt_loras(lora_files)
+    if loaded_runtime:
+        name_to_idx = {path.name: idx for idx, path in enumerate(model_files)}
+        missing_models = [name for name in loaded_runtime["models"] if name not in name_to_idx]
+        if missing_models:
+            print("Preset references models that are not available locally:")
+            for model_name in missing_models:
+                print(f"  - {model_name}")
+            return 1
 
-    mode_name = ["legacy", "perres", "hybrid"][mode]
+        model_idx = [name_to_idx[name] for name in loaded_runtime["models"]]
+        model_paths = [model_files[i] for i in model_idx]
+        model_names = [p.name for p in model_paths]
+        mode_name = loaded_runtime["mode"]
+        mode = ["legacy", "perres", "hybrid"].index(mode_name)
+        execution_options = loaded_runtime.get("execution", execution_options)
+        output_base_name = prompt_output_name(loaded_runtime.get("output_name") or default_output_name) or default_output_name
+
+        config = loaded_runtime.get("config", {})
+        if mode_name == "legacy":
+            weights = list(config.get("weights", []))
+            backbone_idx = int(config.get("backbone_idx", 0))
+            block_weights = config.get("block_multipliers")
+            crossattn_boosts = config.get("crossattn_boosts")
+        elif mode_name == "perres":
+            assignments = config.get("assignments")
+            attn2_locks = config.get("attn2_locks")
+            backbone_idx = list(assignments.values())[0] if assignments else 0
+        else:
+            hybrid_config = config.get("hybrid_config")
+            attn2_locks = config.get("attn2_locks")
+            backbone_idx = 0
+        lora_selections = list(config.get("loras", []))
+
+        adjust_exec = input("Adjust execution profile from the preset? [y/N]: ").strip().lower()
+        if adjust_exec in {"y", "yes"}:
+            execution_options = prompt_execution_options()
+    else:
+        model_idx = prompt_select(model_files, "Select models to merge (comma-separated indices):", [0, 1])
+        if len(model_idx) < 2:
+            print("\nSelect at least 2 models")
+            return 1
+
+        model_paths = [model_files[i] for i in model_idx]
+        model_names = [p.name for p in model_paths]
+
+        print("\nSelect fusion mode:")
+        print("  [0] Legacy - Classic weighted merge")
+        print("  [1] PerRes - Resolution-based block control")
+        print("  [2] Hybrid - Combines PerRes assignment with weighted blending")
+
+        mode_choice = input("Enter mode [0]: ").strip()
+        if not mode_choice:
+            mode_choice = "0"
+
+        try:
+            mode = int(mode_choice)
+            if mode not in [0, 1, 2]:
+                mode = 0
+        except ValueError:
+            mode = 0
+
+        if mode == 0:  # Legacy
+            weights = prompt_weights(model_names, [0.7, 0.3] + [0.0] * (len(model_names) - 2))
+            backbone_idx = pick_backbone(model_names, weights)
+            block_weights = prompt_block_merge(model_names)
+            crossattn_boosts = prompt_crossattn_boost(model_names)
+        elif mode == 1:  # PerRes
+            assignments, attn2_locks = prompt_perres_assignments(model_names)
+            backbone_idx = list(assignments.values())[0]
+        else:  # Hybrid
+            hybrid_config, attn2_locks = prompt_hybrid_config(model_names)
+            backbone_idx = 0
+
+        lora_files = list_safetensors(loras_dir)
+        if lora_files:
+            lora_selections = prompt_loras(lora_files)
+
+        output_base_name = prompt_output_name(default_output_name) or default_output_name
+        execution_options = prompt_execution_options()
+
+        mode_name = ["legacy", "perres", "hybrid"][mode]
+
+    if not loaded_runtime:
+        mode_name = ["legacy", "perres", "hybrid"][mode]
+
     validation = validate_merge_request(
         mode=mode_name,
         model_paths=model_paths,
@@ -326,7 +451,40 @@ def main() -> int:
         if export_path:
             saved_preflight = export_preflight_plan(validation.preflight, Path(export_path))
             print(f"Preflight exported to: {saved_preflight}")
-        proceed = input("Proceed with merge? [Y/n]: ").strip().lower()
+        preset_export = input(
+            f"Save this configuration as reusable preset YAML in {context.presets_dir} [Enter to skip]: "
+        ).strip()
+        if preset_export:
+            preset_path = Path(preset_export)
+            if not preset_path.is_absolute():
+                preset_path = context.presets_dir / preset_path
+            if preset_path.suffix.lower() not in {".yaml", ".yml"}:
+                preset_path = preset_path.with_suffix(".yaml")
+            lora_yaml = [
+                {"file": item["file"], "scale": item["scale"]}
+                for item in validation.normalized["loras"]
+            ] or None
+            save_single_job_preset(
+                preset_path,
+                mode=mode_name,
+                model_names=validation.normalized["model_names"],
+                backbone_idx=validation.normalized["backbone_idx"],
+                output_name=output_base_name,
+                execution=execution_options,
+                job_name=f"Preset_{mode_name}",
+                description="Saved from interactive CLI",
+                weights=validation.normalized.get("weights"),
+                assignments=validation.normalized.get("assignments"),
+                hybrid_config=validation.normalized.get("hybrid_config"),
+                attn2_locks=validation.normalized.get("attn2_locks"),
+                block_multipliers=validation.normalized.get("block_multipliers"),
+                crossattn_boosts=validation.normalized.get("crossattn_boosts"),
+                loras=lora_yaml,
+            )
+            print(f"Preset saved to: {preset_path}")
+        proceed = input(
+            f"Proceed with merge using output '{output_base_name}' and execution '{execution_options['mode']}'? [Y/n]: "
+        ).strip().lower()
         if proceed in {"n", "no"}:
             print("Merge cancelled before execution.")
             return 0
@@ -348,6 +506,7 @@ def main() -> int:
             only_unet=True,
             block_multipliers=block_weights,
             crossattn_boosts=crossattn_boosts,
+            execution=execution_options,
         )
         yaml_kwargs["weights"] = weights
         if block_weights:
@@ -357,14 +516,26 @@ def main() -> int:
     elif mode == 1:
         assignments = validation.normalized["assignments"]
         attn2_locks = validation.normalized["attn2_locks"]
-        merged = merge_perres(model_paths, assignments, backbone_idx, attn2_locks)
+        merged = merge_perres(
+            model_paths,
+            assignments,
+            backbone_idx,
+            attn2_locks,
+            execution=execution_options,
+        )
         yaml_kwargs["assignments"] = assignments
         if attn2_locks:
             yaml_kwargs["attn2_locks"] = attn2_locks
     else:
         hybrid_config = validation.normalized["hybrid_config"]
         attn2_locks = validation.normalized["attn2_locks"]
-        merged = merge_hybrid(model_paths, hybrid_config, backbone_idx, attn2_locks)
+        merged = merge_hybrid(
+            model_paths,
+            hybrid_config,
+            backbone_idx,
+            attn2_locks,
+            execution=execution_options,
+        )
         yaml_kwargs["hybrid_config"] = hybrid_config
         if attn2_locks:
             yaml_kwargs["attn2_locks"] = attn2_locks
@@ -388,6 +559,10 @@ def main() -> int:
         yaml_kwargs,
         model_paths=model_paths,
         lora_paths=[item["path"] for item in normalized_loras] if normalized_loras else None,
+        output_base_name=output_base_name,
+        execution=execution_options_to_dict(execution_options),
+        job_name=f"Interactive_{mode_name}",
+        job_description="Interactive CLI run",
     )
 
     print(f"\nSaved: {output_path.name}")

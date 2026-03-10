@@ -1,6 +1,6 @@
 # XLFusion
 
-XLFusion is a Python tool for merging SDXL checkpoints with a reproducible workflow across CLI, GUI, and batch execution. As of V2.15, the product code lives in `xlfusion/` and the user runtime lives in `workspace/`. It focuses on reliable validation, per-block control, LoRA baking, metadata you can recreate later, and lightweight analysis before or after a merge.
+XLFusion is a Python tool for merging SDXL checkpoints with a reproducible workflow across CLI, GUI, and batch execution. As of V2.15, the product code lives in `xlfusion/` and the user runtime lives in `workspace/`. It focuses on reliable validation, per-block control, low-memory execution, reusable presets, recoverable metadata, and lightweight analysis before or after a merge.
 
 ## What It Does
 
@@ -8,6 +8,8 @@ XLFusion is a Python tool for merging SDXL checkpoints with a reproducible workf
 - Bake LoRAs into the merged result
 - Validate configurations before execution in CLI, GUI, and batch
 - Show a preflight plan with estimated memory, backbone, affected blocks, effective locks, and compatibility warnings
+- Run merges in `standard` or `low-memory` execution mode with shared progress handling
+- Save reusable presets as batch-compatible YAML and load them again in CLI, GUI, or batch
 - Save reproducible metadata and a batch YAML that can recreate the run
 - Analyze similarity, compatibility, and likely merge characteristics
 
@@ -52,7 +54,8 @@ XLFusion/
 │   ├── models/
 │   ├── loras/
 │   ├── output/
-│   └── metadata/
+│   ├── metadata/
+│   └── presets/
 ├── scripts/
 └── tests/
 ```
@@ -82,6 +85,14 @@ python XLFusion.py --batch batch_config_example.yaml
 python XLFusion.py --batch batch_config_example.yaml --validate-only
 ```
 
+Recover a previous run from metadata:
+
+```bash
+python XLFusion.py --recover-metadata workspace/metadata/meta_1
+python XLFusion.py --recover-metadata workspace/metadata/meta_1 --export-recovered recreated.yaml
+python XLFusion.py --recover-metadata workspace/metadata/meta_1 --run-recovered
+```
+
 Analysis:
 
 ```bash
@@ -98,12 +109,15 @@ The interactive flows now share the same execution guardrails:
 - invalid values do not reach `merge_*`
 - a preflight plan is shown before running
 - the preflight can be exported to `.txt` or `.json`
+- reusable presets can be saved as single-job batch YAML files
+- metadata folders can be used to recover the exact batch configuration later
 
 The GUI also provides:
 
 - model list with size and timestamps
 - per-block visual preview
 - real-time progress and cancellation
+- preset import/export and metadata recovery helpers
 
 ## Batch Workflow
 
@@ -112,6 +126,7 @@ Batch mode uses the same validator as CLI and GUI. That means:
 - file existence is checked before merge execution
 - weights, assignments, locks, backbone and LoRAs are validated centrally
 - memory and compatibility warnings are available during validation
+- execution settings can be stored per job for `low-memory` or `standard` runs
 
 See:
 
@@ -133,7 +148,7 @@ Each run also creates a metadata folder in `workspace/metadata/` containing:
 - `metadata.txt`
 - `batch_config.yaml`
 
-The saved metadata includes source models, hashes, mode, backbone, and merge parameters. Metadata is also embedded in the resulting `.safetensors` file.
+The saved metadata includes source models, hashes, mode, backbone, execution settings, and merge parameters. Metadata is also embedded in the resulting `.safetensors` file.
 
 ## Analysis
 
@@ -162,7 +177,7 @@ The smoke test generates synthetic models, runs a bounded batch scenario, and re
 
 ## Future Work
 
-`ROADMAP.md` now starts after the already implemented package/runtime reorganization and validation foundation. The remaining roadmap focuses on performance, reusable presets, metadata recovery, and deeper merge analysis.
+`ROADMAP.md` now starts after the already implemented package/runtime reorganization, validation foundation, low-memory execution, presets, and metadata recovery. The remaining roadmap focuses on deeper merge analysis and longer-term platform evolution.
 
 ## Credits
 

@@ -34,6 +34,7 @@ class BatchJob:
     block_multipliers: Optional[List[Dict[str, float]]] = None
     crossattn_boosts: Optional[List[Dict[str, float]]] = None
     loras: Optional[List[Dict[str, Any]]] = None
+    execution: Optional[Dict[str, Any]] = None
 
     template: Optional[str] = None
     template_params: Optional[Dict[str, Any]] = None
@@ -130,6 +131,9 @@ class BatchValidator:
                 {"file": item["file"], "scale": item["scale"]}
                 for item in validation.normalized["loras"]
             ]
+        if job.execution is not None and not isinstance(job.execution, dict):
+            self.errors.append(f"{prefix} execution: must be a mapping when provided")
+            return
         job.preflight = validation.preflight
 
 

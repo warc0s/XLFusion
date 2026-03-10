@@ -1,145 +1,139 @@
 # XLFusion Roadmap
 
-Estado actual: `main` ya cubre V2.15 con CLI, GUI, batch, analisis, metadatos reproducibles, validacion comun, preflight y la reorganizacion a `xlfusion/` + `workspace/`. Este roadmap recoge solo mejoras futuras que todavia aportan valor real a la aplicacion.
+Current status: `main` already covers V2.2 and V2.15 with CLI, GUI, batch mode, analysis, reproducible metadata, shared validation, preflight, batch-compatible presets, metadata recovery, and the `xlfusion/` + `workspace/` reorganization. This roadmap only tracks future improvements that still add real value to the product.
 
-## Principios para siguientes versiones
+## Principles For Upcoming Versions
 
-- Priorizar fiabilidad antes que mas modos de fusion.
-- Mejorar memoria y tiempos sin sacrificar reproducibilidad.
-- Unificar experiencia entre CLI, GUI y batch.
-- Convertir el analisis en ayuda real para tomar decisiones de mezcla.
-## V2.2 Flujo experto y alto rendimiento
+- Prioritize reliability before adding more merge modes.
+- Improve memory usage and speed without sacrificing reproducibility.
+- Keep the experience aligned across CLI, GUI, and batch.
+- Turn analysis into something that actively helps users make better merge decisions.
 
-Objetivo: hacer que XLFusion escale mejor en memoria, sea mas rapido y permita reutilizar configuraciones complejas sin friccion.
+## V2.3 Merge Quality And Actionable Analysis
 
-### 1. Modo low-memory tensor a tensor
+Goal: move from "seeing data" to "making better merge decisions".
 
-- Introducir un cargador estilo `safe_open` tensor a tensor para rutas de memoria limitada.
-- Preservar dtype en disco y convertir solo durante acumulacion cuando haga falta.
-- Exponer esta ruta como opcion clara en CLI, GUI y batch.
+### 1. Submodule And Layer Analysis
 
-Criterio de aceptacion:
-- Fusionar modelos grandes consume menos RAM que la ruta actual y sigue generando resultados equivalentes dentro de tolerancia numerica.
+- Extend the analyzer with metrics by submodule, histograms, and summaries by model region.
+- Better separate structure, semantics, and style so recommendations are not just based on a single global score.
 
-### 2. Pre-carga y ordenacion por bloque
+Acceptance criteria:
+- The report helps explain which model dominates composition, detail, and style.
 
-- Procesar claves agrupadas por bloque para reducir overhead de acceso.
-- Evaluar prefetch ligero entre modelos cuando el almacenamiento lo permita.
-- Medir mejoras con benchmarks sobre 2, 3 y 4 checkpoints.
+### 2. Weight And Block Recommender
 
-Criterio de aceptacion:
-- Documentar mejora medible en throughput frente a la ruta actual en escenarios repetibles.
+- Generate initial suggestions for `hybrid_config`, `assignments`, and backbone selection from analysis results.
+- Offer profiles such as `balanced`, `style transfer`, `detail recovery`, or `prompt fidelity`.
 
-### 3. Progreso ligero fuera de TTY
+Acceptance criteria:
+- The user can start from a reasonable proposal without configuring everything manually.
 
-- Mantener `tqdm` donde aporta valor, pero ofrecer una salida de progreso simple para logs, entornos no interactivos y empaquetados.
-- Evitar ruido excesivo en batch y facilitar cancelacion/observabilidad.
+### 3. Compatibility Alerts Before Merging
 
-Criterio de aceptacion:
-- La aplicacion informa progreso util tanto en terminal interactiva como en logs o GUI sin duplicar salidas.
+- Detect potentially dangerous differences before execution: incompatible shapes, models that are too far apart, inconsistent locks, or combinations with low expected value.
+- Integrate those alerts into preflight and GUI.
 
-### 4. Presets reutilizables de verdad
+Acceptance criteria:
+- High-risk combinations are detected before spending time and memory on a failed or poor merge.
 
-- Unificar `templates`, presets de GUI y configuraciones batch en un solo sistema.
-- Permitir guardar una configuracion creada en GUI o CLI como preset reutilizable.
-- Permitir cargar presets desde metadata previa.
+### 4. Checkpoint Algebra
 
-Criterio de aceptacion:
-- Una fusion configurada en GUI puede guardarse y relanzarse por batch sin editar a mano.
+- Add operations like `A + alpha(B - C)` and compatible variants for `legacy` and `hybrid`.
+- Reuse the streaming engine to avoid excessive memory usage.
+- Expose it as an advanced mode, not as a replacement for the main workflow.
 
-### 5. Recuperacion desde metadatos
+Acceptance criteria:
+- Synthetic tests verify the tensor arithmetic and the output is fully audited in metadata.
 
-- Añadir comando para reconstruir una ejecucion a partir de `workspace/metadata/meta_*`.
-- Rehidratar configuracion exacta, entradas y nombre de salida propuesto.
-- Señalar diferencias si faltan modelos o LoRAs originales.
+### 5. Expanded LoRA Support
 
-Criterio de aceptacion:
-- Desde una carpeta de metadata se puede relanzar la fusion o generar un YAML equivalente.
+- Extend LoRA baking beyond UNet when compatible text-encoder keys exist.
+- Add better shape validation and a report by submodule showing what was applied or skipped.
 
-### 6. UX de configuracion mas segura
+Acceptance criteria:
+- The user knows exactly which parts of a LoRA were applied and which were not.
 
-- Mejorar formularios de GUI para pesos por bloque, locks y LoRAs con validacion inline.
-- En CLI, simplificar prompts complejos y mostrar defaults mas legibles.
-- Añadir confirmacion final con resumen antes de ejecutar.
+### 6. Explicit Non-UNet Mixing
 
-Criterio de aceptacion:
-- Configurar una fusion compleja de 3 o 4 modelos requiere menos pasos y menos errores de entrada.
+- Turn `only_unet` into a visible, supported option across all modes.
+- Allow explicit inclusion or exclusion of VAE and text encoder where it makes sense.
 
-## V2.3 Calidad de fusion y analisis accionable
+Acceptance criteria:
+- The configuration clearly shows which components are being merged and that choice is preserved in metadata.
 
-Objetivo: pasar de "ver datos" a "tomar mejores decisiones de mezcla".
+## V2.4 Platform And Internal Evolution
 
-### 1. Analisis por submodulo y capa
+Goal: make it easier for the project to keep growing without repeating logic or introducing regressions.
 
-- Ampliar el analizador con metricas por submodulo, histogramas y resumen por zonas del modelo.
-- Separar mejor estructura, semantica y estilo para que la recomendacion no sea solo un score global.
+### 1. Clearer Internal API
 
-Criterio de aceptacion:
-- El informe ayuda a entender que modelo domina composicion, detalle y estilo.
+- Better separate the `config`, `merge`, `workflow`, `analysis`, and GUI layers.
+- Reduce duplication between interactive CLI, batch, and GUI.
+- Formalize shared configuration types.
 
-### 2. Recomendador de pesos y bloques
+### 2. Test Coverage Focused On Real Regressions
 
-- Generar sugerencias iniciales de `hybrid_config`, `assignments` y backbone a partir del analisis.
-- Ofrecer perfiles como `balanced`, `style transfer`, `detail recovery` o `prompt fidelity`.
+- Prioritize tests around validation, cancellation, reproducible metadata, low-memory modes, and checkpoint algebra.
+- Add synthetic fixtures to compare outputs across different execution paths.
 
-Criterio de aceptacion:
-- El usuario puede partir de una propuesta razonable sin configurar todo a mano.
+### 3. Future Architectures Without Touching The Core
 
-### 3. Alertas de compatibilidad antes de fusionar
+- Prepare a registry of block mappings to support other partitions or derived architectures without changing the main engine.
+- Keep SDXL as the primary path while avoiding unnecessary coupling.
 
-- Detectar diferencias potencialmente peligrosas antes de ejecutar: shapes incompatibles, modelos demasiado alejados, locks incoherentes o combinaciones con bajo valor esperado.
-- Integrar estas alertas en preflight y GUI.
+## V2.5 Full Coverage Of The Current Product
 
-Criterio de aceptacion:
-- Las combinaciones de alto riesgo se detectan antes de gastar tiempo y memoria en una fusion fallida o mediocre.
+Goal: build a broad and useful test base that covers the code already in place so regressions are detected much earlier on every change.
 
-### 4. Algebra de checkpoints
+### 1. Cover Every Relevant Module In The Current Product
 
-- Añadir operaciones tipo `A + alpha(B - C)` y variantes compatibles con `legacy` y `hybrid`.
-- Reutilizar el motor streaming para evitar disparar memoria.
-- Exponerlo como modo avanzado, no como sustituto del flujo principal.
+- Review `xlfusion/` module by module and add tests wherever coverage is currently missing or clearly insufficient.
+- Prioritize observable behavior and public contracts before fragile implementation details.
+- Keep the focus on the current product, not on future features.
 
-Criterio de aceptacion:
-- Hay tests sinteticos que verifican la aritmetica tensorial y la salida queda auditada en metadata.
+Acceptance criteria:
+- The main areas of the product have automated tests covering normal behavior, expected failures, and useful edge cases.
 
-### 5. Soporte LoRA ampliado
+### 2. Harden CLI, Batch, Workflow, Metadata, And Recovery
 
-- Extender el horneado de LoRAs mas alla de UNet cuando existan claves compatibles para text encoders.
-- Añadir mejor validacion de shape y un reporte por submodulo aplicado/omitido.
+- Add dedicated tests for the flows most likely to break compatibility: configuration loading, validation, execution, persistence, presets, and metadata recovery.
+- Verify that the same configuration produces coherent artifacts in CLI, batch, and GUI when they share the same common layer.
+- Ensure output name handling, metadata, recreated batch YAML, and execution options remain stable through refactors.
 
-Criterio de aceptacion:
-- El usuario sabe exactamente que partes de la LoRA se aplicaron y cuales no.
+Acceptance criteria:
+- A change in configuration, workflow, or persistence breaks focused tests before it reaches the user.
 
-### 6. Exponer mezcla no solo UNet
+### 3. Compare Execution Paths To Avoid Silent Divergence
 
-- Convertir `only_unet` en una opcion visible y soportada en todos los modos.
-- Permitir incluir o excluir VAE y text encoder de forma explicita cuando tenga sentido.
+- Add synthetic tests that compare results between `standard` and `low-memory`, across modes where appropriate, and between direct execution and metadata-based reconstruction.
+- Include numerical equivalence checks within tolerance and output-structure checks.
+- Define and verify minimum contracts for progress, cancellation, and warnings.
 
-Criterio de aceptacion:
-- La configuracion deja claro que componentes se mezclan y esa decision queda guardada en metadata.
+Acceptance criteria:
+- If two execution paths that should behave the same start diverging, tests detect it immediately.
 
-## V2.4 Plataforma y evolucion interna
+### 4. Real Coverage For Errors And Historical Regressions
 
-Objetivo: facilitar que el proyecto siga creciendo sin repetir logica ni abrir regresiones.
+- Turn previously found bugs into permanent tests before or alongside any fix.
+- Cover shape errors, missing models, incompatible LoRAs, invalid YAML, incomplete presets, and partial metadata.
+- Avoid having a suite made only of happy-path tests.
 
-### 1. API interna mas clara
+Acceptance criteria:
+- Known or plausible failures have automated regression coverage and do not rely on team memory to avoid repeating them.
 
-- Delimitar mejor capas de `config`, `merge`, `workflow`, `analysis` y GUI.
-- Reducir duplicacion entre CLI interactiva, batch y GUI.
-- Formalizar tipos de configuracion compartidos.
+### 5. A Reliable Suite For Day-To-Day Development
 
-### 2. Cobertura de tests orientada a regresiones reales
+- Keep the suite reasonably fast with small synthetic models so it can be run frequently.
+- Split fast contract tests from heavier integration tests when needed, without losing useful coverage.
+- Clearly document which commands validate the product and which ones are required before accepting a functional change.
 
-- Priorizar tests sobre validacion, cancelacion, metadata reproducible, modos low-memory y algebra de checkpoints.
-- Añadir fixtures sinteticos para comparar salidas entre distintas rutas de ejecucion.
+Acceptance criteria:
+- After any relevant change, there is a clear set of tests that provides real confidence about the state of the product.
 
-### 3. Arquitecturas futuras sin tocar el core
+## Recommended Priorities
 
-- Preparar un registro de mapeos de bloques para soportar otras particiones o arquitecturas derivadas sin modificar el motor principal.
-- Mantener SDXL como ruta principal, pero evitar acoplamientos innecesarios.
-
-## Prioridades recomendadas
-
-1. V2.2 Flujo experto y alto rendimiento
-2. V2.3 Calidad de fusion y analisis accionable
-3. V2.4 Plataforma y evolucion interna
+1. V2.2 Expert Workflow And High Performance
+2. V2.3 Merge Quality And Actionable Analysis
+3. V2.4 Platform And Internal Evolution
+4. V2.5 Full Coverage Of The Current Product

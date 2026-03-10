@@ -71,6 +71,35 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn(lora.name, meta_txt)
             self.assertIn("weights", meta_txt)
 
+    def test_batch_yaml_keeps_output_name_and_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            output_dir = base / "output"
+            metadata_dir = base / "metadata"
+            output_dir.mkdir()
+            metadata_dir.mkdir()
+
+            state = {"linear.weight": torch.zeros(1)}
+            output_path, metadata_folder, _version = save_merge_results(
+                output_dir,
+                metadata_dir,
+                state,
+                ["model_a.safetensors", "model_b.safetensors"],
+                "legacy",
+                0,
+                {"weights": [0.5, 0.5]},
+                output_base_name="RecoveredName",
+                execution={"mode": "low-memory", "progress": "simple", "log_every": 10},
+                job_name="SavedJob",
+                job_description="Saved from workflow test",
+            )
+
+            self.assertTrue(output_path.name.startswith("RecoveredName_V"))
+            batch_yaml = (metadata_folder / "batch_config.yaml").read_text(encoding="utf-8")
+            self.assertIn("output_name: RecoveredName", batch_yaml)
+            self.assertIn("execution:", batch_yaml)
+            self.assertIn("mode: low-memory", batch_yaml)
+
 
 if __name__ == "__main__":
     unittest.main()

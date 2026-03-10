@@ -10,8 +10,15 @@ import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 
 from .config import AppContext, list_safetensors
+from .execution import execution_options_to_dict
 from .lora import apply_single_lora
 from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
+from .presets import (
+    batch_job_to_runtime_state,
+    inspect_recovery_source,
+    load_single_job_preset,
+    save_single_job_preset,
+)
 from .validation import export_preflight_plan, format_preflight_plan, validate_merge_request
 from .workflow import save_merge_results
 
@@ -775,6 +782,7 @@ class FusionGUI:
         self.loras_dir = context.loras_dir
         self.output_dir = context.output_dir
         self.metadata_dir = context.metadata_dir
+        self.presets_dir = context.presets_dir
 
         self.state: Dict[str, object] = {
             "model_indices": [],
@@ -784,6 +792,8 @@ class FusionGUI:
             "legacy": {},
             "perres": {},
             "hybrid": {},
+            "output_name": self.context.config["model_output"].get("base_name", "XLFusion"),
+            "execution": execution_options_to_dict(None),
         }
 
         self.model_paths: List[Path] = []
@@ -800,6 +810,10 @@ class FusionGUI:
         self.is_running = False
 
         self.mode_var = tk.StringVar(value="legacy")
+        self.output_name_var = tk.StringVar(value=str(self.state["output_name"]))
+        self.execution_mode_var = tk.StringVar(value="low-memory")
+        self.progress_mode_var = tk.StringVar(value="auto")
+        self.progress_every_var = tk.StringVar(value="250")
 
         self._build_layout()
         self._load_resources()
@@ -941,7 +955,14 @@ class FusionGUI:
 
     def _create_config_step(self, parent: ttk.Frame) -> ttk.Frame:
         frame = ttk.Frame(parent)
-        ttk.Label(frame, text="Step 3: Mode Configuration", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        header = ttk.Frame(frame)
+        header.pack(fill="x")
+        ttk.Label(header, text="Step 3: Mode Configuration", font=("Segoe UI", 12, "bold")).pack(anchor="w", side="left")
+        actions = ttk.Frame(header)
+        actions.pack(side="right")
+        ttk.Button(actions, text="Load Preset", command=self._load_preset_dialog).pack(side="left", padx=(0, 4))
+        ttk.Button(actions, text="Load Metadata", command=self._load_metadata_dialog).pack(side="left", padx=(0, 4))
+        ttk.Button(actions, text="Save Preset", command=self._save_preset_dialog).pack(side="left")
         self.config_hint = ttk.Label(frame, text="Complete the parameters of the selected mode.")
         self.config_hint.pack(anchor="w", pady=(2, 8))
 
@@ -1006,6 +1027,33 @@ class FusionGUI:
             frame,
             text="Start the merge and monitor progress in real time.",
         ).pack(anchor="w", pady=(2, 8))
+
+        execution_frame = ttk.LabelFrame(frame, text="Execution")
+        execution_frame.pack(fill="x", pady=(0, 8))
+        ttk.Label(execution_frame, text="Output base name").grid(row=0, column=0, padx=4, pady=4, sticky="w")
+        ttk.Entry(execution_frame, textvariable=self.output_name_var, width=32).grid(
+            row=0, column=1, padx=4, pady=4, sticky="w"
+        )
+        ttk.Label(execution_frame, text="Execution mode").grid(row=1, column=0, padx=4, pady=4, sticky="w")
+        ttk.Combobox(
+            execution_frame,
+            textvariable=self.execution_mode_var,
+            values=["low-memory", "standard"],
+            state="readonly",
+            width=16,
+        ).grid(row=1, column=1, padx=4, pady=4, sticky="w")
+        ttk.Label(execution_frame, text="Progress output").grid(row=1, column=2, padx=4, pady=4, sticky="w")
+        ttk.Combobox(
+            execution_frame,
+            textvariable=self.progress_mode_var,
+            values=["auto", "simple", "quiet"],
+            state="readonly",
+            width=12,
+        ).grid(row=1, column=3, padx=4, pady=4, sticky="w")
+        ttk.Label(execution_frame, text="Simple interval").grid(row=1, column=4, padx=4, pady=4, sticky="w")
+        ttk.Entry(execution_frame, textvariable=self.progress_every_var, width=8).grid(
+            row=1, column=5, padx=4, pady=4, sticky="w"
+        )
 
         self.run_summary = ttk.Label(frame, text="Ready to run")
         self.run_summary.pack(anchor="w", pady=(4, 8))
@@ -1175,6 +1223,131 @@ class FusionGUI:
             loras_dir=self.loras_dir,
         )
 
+    def _get_execution_config(self) -> Dict[str, object]:
+        try:
+            log_every = max(1, int(self.progress_every_var.get().strip() or "250"))
+        except ValueError:
+            log_every = 250
+        execution = {
+            "mode": self.execution_mode_var.get() or "low-memory",
+            "progress": self.progress_mode_var.get() or "auto",
+            "log_every": log_every,
+        }
+        self.state["execution"] = execution
+        self.state["output_name"] = self.output_name_var.get().strip() or self.context.config["model_output"].get("base_name", "XLFusion")
+        return execution
+
+    def _apply_runtime_state(self, runtime: Dict[str, object]) -> None:
+        model_names = list(runtime.get("models", []))
+        name_to_idx = {path.name: idx for idx, path in enumerate(self.model_paths)}
+        missing = [name for name in model_names if name not in name_to_idx]
+        if missing:
+            raise ValueError(f"Missing models in workspace: {', '.join(missing)}")
+
+        selected_ids = [name_to_idx[name] for name in model_names]
+        self.model_tree.selection_remove(self.model_tree.selection())
+        for idx in selected_ids:
+            self.model_tree.selection_add(str(idx))
+        self._update_model_selection()
+
+        self.state["model_indices"] = selected_ids
+        self.state["model_paths"] = [self.model_paths[i] for i in selected_ids]
+        self.state["model_names"] = model_names
+
+        mode = str(runtime.get("mode", "legacy"))
+        self.mode_var.set(mode)
+        self.state["mode"] = mode
+        self.state[mode] = runtime.get("config", {})
+
+        execution = runtime.get("execution", {}) or {}
+        execution = execution_options_to_dict(execution)
+        self.execution_mode_var.set(str(execution.get("mode", "low-memory")))
+        self.progress_mode_var.set(str(execution.get("progress", "auto")))
+        self.progress_every_var.set(str(execution.get("log_every", 250)))
+        self.output_name_var.set(str(runtime.get("output_name") or self.context.config["model_output"].get("base_name", "XLFusion")))
+        self.state["execution"] = execution
+        self.state["output_name"] = self.output_name_var.get()
+
+        self._prepare_config_panel()
+        validation = self._build_validation()
+        self.state["validation"] = validation
+        self.state["preflight"] = validation.preflight
+        self._update_preview()
+        self._update_run_summary()
+
+    def _load_preset_dialog(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Load preset",
+            initialdir=str(self.presets_dir),
+            filetypes=[("YAML files", "*.yaml *.yml")],
+        )
+        if not path:
+            return
+        try:
+            job = load_single_job_preset(Path(path))
+            self._apply_runtime_state(batch_job_to_runtime_state(job))
+        except Exception as exc:
+            messagebox.showerror("Preset error", str(exc))
+
+    def _load_metadata_dialog(self) -> None:
+        path = filedialog.askdirectory(
+            title="Load metadata folder",
+            initialdir=str(self.metadata_dir),
+            mustexist=True,
+        )
+        if not path:
+            return
+        try:
+            inspection = inspect_recovery_source(Path(path), self.context)
+            self._apply_runtime_state(batch_job_to_runtime_state(inspection.job))
+            if inspection.warnings:
+                messagebox.showwarning("Metadata warnings", "\n".join(inspection.warnings))
+        except Exception as exc:
+            messagebox.showerror("Metadata error", str(exc))
+
+    def _save_preset_dialog(self) -> None:
+        validation = self._build_validation()
+        if not validation.valid:
+            details = "\n".join(f"- {item.field}: {item.message}" for item in validation.errors)
+            messagebox.showwarning("Invalid configuration", details)
+            return
+        path = filedialog.asksaveasfilename(
+            title="Save preset",
+            initialdir=str(self.presets_dir),
+            defaultextension=".yaml",
+            filetypes=[("YAML files", "*.yaml")],
+        )
+        if not path:
+            return
+
+        execution = self._get_execution_config()
+        loras = [
+            {"file": item["file"], "scale": item["scale"]}
+            for item in validation.normalized.get("loras", [])
+        ] or None
+        try:
+            save_single_job_preset(
+                Path(path),
+                mode=str(self.state.get("mode", "legacy")),
+                model_names=list(validation.normalized.get("model_names", [])),
+                backbone_idx=int(validation.normalized.get("backbone_idx", 0)),
+                output_name=self.output_name_var.get().strip() or None,
+                execution=execution,
+                job_name=f"GUI_{self.state.get('mode', 'legacy')}",
+                description="Saved from XLFusion GUI",
+                weights=validation.normalized.get("weights"),
+                assignments=validation.normalized.get("assignments"),
+                hybrid_config=validation.normalized.get("hybrid_config"),
+                attn2_locks=validation.normalized.get("attn2_locks"),
+                block_multipliers=validation.normalized.get("block_multipliers"),
+                crossattn_boosts=validation.normalized.get("crossattn_boosts"),
+                loras=loras,
+            )
+        except Exception as exc:
+            messagebox.showerror("Preset error", str(exc))
+            return
+        messagebox.showinfo("Preset saved", f"Preset saved to:\n{path}")
+
     def _set_preflight_text(self, content: str) -> None:
         self.preflight_text.configure(state="normal")
         self.preflight_text.delete("1.0", "end")
@@ -1321,11 +1494,13 @@ class FusionGUI:
     def _update_run_summary(self) -> None:
         plan = self.state.get("preflight")
         if plan:
+            execution = self._get_execution_config()
             self.run_summary.config(
                 text=(
                     f"Mode: {plan.mode} | Backbone: {plan.backbone_name} | "
                     f"Models used: {', '.join(plan.selected_models)} | "
-                    f"Estimated memory: {plan.estimated_memory_gb:.2f} GB"
+                    f"Estimated memory: {plan.estimated_memory_gb:.2f} GB | "
+                    f"Execution: {execution['mode']} | Output: {self.output_name_var.get().strip() or 'default'}"
                 )
             )
             return
@@ -1350,8 +1525,21 @@ class FusionGUI:
             return
         self.state["validation"] = validation
         self.state["preflight"] = validation.preflight
+        execution = self._get_execution_config()
         self._update_run_summary()
         self._set_preflight_text(format_preflight_plan(validation.preflight))
+
+        proceed = messagebox.askyesno(
+            "Confirm merge",
+            (
+                f"Mode: {self.state.get('mode')}\n"
+                f"Output: {self.output_name_var.get().strip() or 'default'}\n"
+                f"Execution: {execution['mode']} / {execution['progress']}\n\n"
+                "Do you want to start the merge?"
+            ),
+        )
+        if not proceed:
+            return
 
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
@@ -1379,6 +1567,8 @@ class FusionGUI:
             model_paths: List[Path] = list(validation.normalized.get("model_paths", []))
             model_names: List[str] = list(validation.normalized.get("model_names", []))
             mode: str = self.state.get("mode", "legacy")
+            execution = self._get_execution_config()
+            output_name = self.output_name_var.get().strip() or None
 
             if len(model_paths) < 2:
                 raise RuntimeError("At least two models are required to merge.")
@@ -1403,6 +1593,7 @@ class FusionGUI:
                     only_unet=True,
                     block_multipliers=block_multipliers,
                     crossattn_boosts=cross_boosts,
+                    execution=execution,
                     progress_cb=on_progress,
                     cancel_event=self.cancel_event,
                 )
@@ -1430,6 +1621,7 @@ class FusionGUI:
                     assignments,
                     backbone_idx,
                     attn2,
+                    execution=execution,
                     progress_cb=on_progress,
                     cancel_event=self.cancel_event,
                 )
@@ -1456,6 +1648,7 @@ class FusionGUI:
                     hybrid_cfg,
                     backbone_idx,
                     attn2,
+                    execution=execution,
                     progress_cb=on_progress,
                     cancel_event=self.cancel_event,
                 )
@@ -1484,6 +1677,10 @@ class FusionGUI:
                 yaml_kwargs,
                 model_paths=model_paths,
                 lora_paths=lora_paths,
+                output_base_name=output_name,
+                execution=execution_options_to_dict(execution),
+                job_name=f"GUI_{mode}",
+                job_description="Interactive GUI run",
             )
 
             self.log_queue.put(("success", f"Merge completed: {output_path.name} (V{version})"))

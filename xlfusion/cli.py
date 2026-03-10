@@ -6,6 +6,45 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
+def prompt_output_name(default_name: str = "XLFusion") -> Optional[str]:
+    raw = input(f"Output base name [{default_name}]: ").strip()
+    if not raw:
+        return default_name
+    return raw
+
+
+def prompt_execution_options() -> Dict[str, object]:
+    print("\nExecution profile:")
+    print("  [0] Low-memory - tensor by tensor, grouped by block")
+    print("  [1] Standard   - current order, same validation and metadata")
+    mode_raw = input("Select execution mode [0]: ").strip()
+    mode = "standard" if mode_raw == "1" else "low-memory"
+
+    print("\nProgress output:")
+    print("  [0] Auto   - tqdm in TTY, simple lines outside TTY")
+    print("  [1] Simple - lightweight log lines")
+    print("  [2] Quiet  - no console progress bar")
+    progress_raw = input("Select progress output [0]: ").strip()
+    if progress_raw == "1":
+        progress = "simple"
+    elif progress_raw == "2":
+        progress = "quiet"
+    else:
+        progress = "auto"
+
+    log_every_raw = input("Simple progress interval in tensors [250]: ").strip()
+    try:
+        log_every = max(1, int(log_every_raw or "250"))
+    except ValueError:
+        log_every = 250
+
+    return {
+        "mode": mode,
+        "progress": progress,
+        "log_every": log_every,
+    }
+
+
 def prompt_select(items: List[Path], title: str, default_idx: List[int]) -> List[int]:
     print(f"\n{title}")
     for i, p in enumerate(items):
