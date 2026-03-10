@@ -1,19 +1,19 @@
-# XLFusion V2.1 Configuration
+# XLFusion V2.15 Configuration
 # Copy this file to config.yaml if you want local overrides.
 
 model_output:
   base_name: "XLFusion"
   version_prefix: "V"
   file_extension: ".safetensors"
-  output_dir: "output"
-  metadata_dir: "metadata"
+  output_dir: "workspace/output"
+  metadata_dir: "workspace/metadata"
   auto_version: true
 
 directories:
-  models: "models"
-  loras: "loras"
-  output: "output"
-  metadata: "metadata"
+  models: "workspace/models"
+  loras: "workspace/loras"
+  output: "workspace/output"
+  metadata: "workspace/metadata"
 
 merge_defaults:
   legacy:
@@ -31,4 +31,4 @@ merge_defaults:
 
 app:
   tool_name: "XLFusion"
-  version: "2.1"
+  version: "2.15"

@@ -42,6 +42,8 @@ def save_merge_results(
     *,
     model_paths: Optional[List[Path]] = None,
     lora_paths: Optional[List[Path]] = None,
+    output_base_name: Optional[str] = None,
+    extra_metadata: Optional[Dict[str, str]] = None,
 ) -> Tuple[Path, Path, int]:
     """Unified persistence of the merged model and auxiliary files.
 
@@ -62,7 +64,7 @@ def save_merge_results(
     model_names = list(model_names)
     yaml_kwargs = yaml_kwargs or {}
 
-    output_path, version = next_version_path(output_dir)
+    output_path, version = next_version_path(output_dir, base_name_override=output_base_name)
     config = load_config(root=output_dir.parent, reporter=None)
 
     meta = {
@@ -72,6 +74,8 @@ def save_merge_results(
         "version": config["app"]["version"],
         "timestamp": str(time.time()),
     }
+    if extra_metadata:
+        meta.update(extra_metadata)
 
     save_state(output_path, merged_state, meta)
 

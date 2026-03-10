@@ -5,7 +5,7 @@ import torch
 from safetensors.torch import save_file as st_save
 
 ROOT = Path(__file__).resolve().parent.parent
-MODELS = ROOT / "models"
+MODELS = ROOT / "workspace" / "models"
 
 def make_state(seed: int):
     torch.manual_seed(seed)
@@ -47,4 +47,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

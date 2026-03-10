@@ -16,6 +16,8 @@ import sys
 import json
 import time
 import logging
+import copy
+import ast
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Union
 from dataclasses import dataclass, field
@@ -33,11 +35,10 @@ except ImportError:
     TQDM_AVAILABLE = False
 
 # Import existing XLFusion functions
-from .config import load_config, ensure_dirs, list_safetensors, next_version_path, YAML_AVAILABLE
+from .config import load_config, ensure_dirs, list_safetensors, YAML_AVAILABLE
 from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
 from .lora import apply_single_lora
-from .memory import save_state
-from .blocks import UNET_PREFIX
+from .workflow import save_merge_results
 from .validation import format_preflight_plan, validate_merge_request
 
 
@@ -342,73 +343,59 @@ class BatchProcessor:
         if merged_state is None:
             raise ValueError(f"Unsupported mode: {job.mode}")
 
-        # Determine output path
         output_dir = self.output_dir / self.config.global_settings.get("output_base", "batch_output")
         output_dir.mkdir(parents=True, exist_ok=True)
-
-        if job.output_name:
-            # Custom name provided
-            job.output_path, job.version = next_version_path(output_dir)
-            # Replace the auto-generated name with custom name
-            if job.version is not None:
-                custom_name = f"{job.output_name}_V{job.version}.safetensors"
-                job.output_path = output_dir / custom_name
-        else:
-            # Auto-generated name
-            job.output_path, job.version = next_version_path(output_dir)
-
-        # Prepare metadata
-        config = load_config(root=self.root_dir, reporter=None)
-        app_cfg = config["app"]
-
-        # Verify output_path before using it
-        if job.output_path is None:
-            raise ValueError("Output path not determined")
-
-        meta_embed = {
-            "title": job.output_path.stem,
-            "format": "sdxl-a1111-like",
-            "merge_mode": job.mode,
-            "batch_job": job.name,
-            "backbone": job.models[job.backbone_idx],
-            "models": json.dumps(job.models, ensure_ascii=False),
-            "created": datetime.now().isoformat(timespec='seconds'),
-            "tool": app_cfg.get("tool_name", "XLFusion"),
-            "version": app_cfg.get("version", "1.3")
-        }
-
-        # Add mode-specific metadata
-        if job.mode == "legacy":
-            meta_embed.update({
-                "weights": json.dumps(job.weights, ensure_ascii=False),
-                "block_multipliers": json.dumps(job.block_multipliers, ensure_ascii=False) if job.block_multipliers else "",
-                "crossattn_boosts": json.dumps(job.crossattn_boosts, ensure_ascii=False) if job.crossattn_boosts else "",
-                "loras": json.dumps(job.loras, ensure_ascii=False) if job.loras else "",
-            })
-        elif job.mode == "perres":
-            meta_embed.update({
-                "assignments": json.dumps(job.assignments, ensure_ascii=False),
-                "attn2_locks": json.dumps(job.attn2_locks, ensure_ascii=False) if job.attn2_locks else "",
-                "loras": json.dumps(job.loras, ensure_ascii=False) if job.loras else "",
-            })
-        elif job.mode == "hybrid":
-            meta_embed.update({
-                "hybrid_config": json.dumps(job.hybrid_config, ensure_ascii=False),
-                "attn2_locks": json.dumps(job.attn2_locks, ensure_ascii=False) if job.attn2_locks else "",
-                "loras": json.dumps(job.loras, ensure_ascii=False) if job.loras else "",
-            })
-
-        # Save model
-        if job.output_path is None:
-            raise ValueError("Output path not determined")
-        self.logger.info(f"Saving model to {job.output_path}")
-        save_state(job.output_path, merged_state, meta_embed)
-
-        # Create audit log
-        self._create_audit_log(job, meta_embed)
-
         job.keys_processed = len(merged_state)
+        yaml_kwargs = self._build_yaml_kwargs(job)
+        extra_metadata = {
+            "batch_job": job.name,
+            "description": job.description,
+        }
+        output_path, metadata_folder, version = save_merge_results(
+            output_dir,
+            self.metadata_dir,
+            merged_state,
+            job.models,
+            job.mode,
+            job.backbone_idx,
+            yaml_kwargs,
+            model_paths=job.model_paths,
+            lora_paths=[
+                self.loras_dir / spec["file"]
+                for spec in (job.loras or [])
+            ] or None,
+            output_base_name=job.output_name,
+            extra_metadata=extra_metadata,
+        )
+        job.output_path = output_path
+        job.version = version
+        self.logger.info(f"Saved model to {job.output_path}")
+        self.logger.info(f"Metadata saved to: {metadata_folder.name}/")
         job.success = True
+
+    def _build_yaml_kwargs(self, job: BatchJob) -> Dict[str, Any]:
+        yaml_kwargs: Dict[str, Any] = {}
+        if job.mode == "legacy":
+            if job.weights:
+                yaml_kwargs["weights"] = job.weights
+            if job.block_multipliers:
+                yaml_kwargs["block_multipliers"] = job.block_multipliers
+            if job.crossattn_boosts:
+                yaml_kwargs["crossattn_boosts"] = job.crossattn_boosts
+        elif job.mode == "perres":
+            if job.assignments:
+                yaml_kwargs["assignments"] = job.assignments
+            if job.attn2_locks:
+                yaml_kwargs["attn2_locks"] = job.attn2_locks
+        elif job.mode == "hybrid":
+            if job.hybrid_config:
+                yaml_kwargs["hybrid_config"] = job.hybrid_config
+            if job.attn2_locks:
+                yaml_kwargs["attn2_locks"] = job.attn2_locks
+
+        if job.loras:
+            yaml_kwargs["loras"] = job.loras
+        return yaml_kwargs
 
     def _create_audit_log(self, job: BatchJob, meta_embed: Dict[str, str]) -> None:
         """Create detailed audit log for the job"""
@@ -461,9 +448,11 @@ class BatchProcessor:
             if job.attn2_locks:
                 log_lines.append("")
                 log_lines.append("Cross-attention locks:")
-                log_lines.append(f"  Down: {job.models[job.attn2_locks['down']]}")
-                log_lines.append(f"  Mid:  {job.models[job.attn2_locks['mid']]}")
-                log_lines.append(f"  Up:   {job.models[job.attn2_locks['up']]}")
+                for block_name in ["down", "mid", "up"]:
+                    lock_idx = job.attn2_locks.get(block_name)
+                    if lock_idx is None:
+                        continue
+                    log_lines.append(f"  {block_name.capitalize()}: {job.models[lock_idx]}")
             if job.loras:
                 log_lines.append("")
                 log_lines.append("Baked LoRAs:")
@@ -480,9 +469,11 @@ class BatchProcessor:
             if job.attn2_locks:
                 log_lines.append("")
                 log_lines.append("Cross-attention locks:")
-                log_lines.append(f"  Down: {job.models[job.attn2_locks['down']]}")
-                log_lines.append(f"  Mid:  {job.models[job.attn2_locks['mid']]}")
-                log_lines.append(f"  Up:   {job.models[job.attn2_locks['up']]}")
+                for block_name in ["down", "mid", "up"]:
+                    lock_idx = job.attn2_locks.get(block_name)
+                    if lock_idx is None:
+                        continue
+                    log_lines.append(f"  {block_name.capitalize()}: {job.models[lock_idx]}")
             if job.loras:
                 log_lines.append("")
                 log_lines.append("Baked LoRAs:")
@@ -634,7 +625,7 @@ def load_batch_config(config_path: Path) -> BatchConfig:
 def apply_template(job_data: Dict[str, Any], template: Dict[str, Any]) -> Dict[str, Any]:
     """Apply template configuration to job data"""
     # Start with template config
-    result = template.get("config_template", {}).copy()
+    result = copy.deepcopy(template.get("config_template", {}))
 
     # Override with job-specific data
     result.update(job_data)
@@ -653,48 +644,62 @@ def apply_template(job_data: Dict[str, Any], template: Dict[str, Any]) -> Dict[s
 
 
 def interpolate_params(data: Any, params: Dict[str, Any]) -> Any:
-    """Recursively interpolate parameters in nested data structures with safe expression evaluation"""
+    """Recursively interpolate parameters in nested data structures with safe numeric evaluation."""
+    def evaluate_numeric_expression(expr: str) -> float:
+        tree = ast.parse(expr, mode="eval")
+
+        def _eval(node: ast.AST) -> float:
+            if isinstance(node, ast.Expression):
+                return _eval(node.body)
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                return float(node.value)
+            if isinstance(node, ast.Name):
+                if node.id not in params:
+                    raise ValueError(f"Unknown parameter '{node.id}'")
+                value = params[node.id]
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError(f"Parameter '{node.id}' is not numeric")
+                return float(value)
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+                operand = _eval(node.operand)
+                return operand if isinstance(node.op, ast.UAdd) else -operand
+            if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
+                left = _eval(node.left)
+                right = _eval(node.right)
+                if isinstance(node.op, ast.Add):
+                    return left + right
+                if isinstance(node.op, ast.Sub):
+                    return left - right
+                if isinstance(node.op, ast.Mult):
+                    return left * right
+                return left / right
+            raise ValueError("Unsupported template expression")
+
+        return _eval(tree)
+
     if isinstance(data, str):
-        # First, replace simple parameter placeholders
-        result = data
-        for key, value in params.items():
-            placeholder = "{{" + key + "}}"
-            if placeholder in result:
-                result = result.replace(placeholder, str(value))
-        
-        # Then evaluate mathematical expressions in {{...}} format using ast.literal_eval
         import re
-        import ast
         pattern = r'\{\{([^}]+)\}\}'
-        
-        def evaluate_expression(match):
-            expr = match.group(1).strip()
-            
-            # Only allow safe mathematical operations
-            allowed_chars = set('0123456789.+-*/() ')
-            if not all(c in allowed_chars or c.isalpha() or c == '_' for c in expr):
-                # If contains unsafe characters, don't evaluate
-                return match.group(0)
-            
+        exact_match = re.fullmatch(pattern, data.strip())
+        if exact_match:
+            expr = exact_match.group(1).strip()
+            if expr in params:
+                return params[expr]
             try:
-                # Replace parameter names with values
-                safe_expr = expr
-                for key, value in params.items():
-                    if key in safe_expr:
-                        try:
-                            safe_expr = safe_expr.replace(key, str(float(value)))
-                        except (ValueError, TypeError):
-                            safe_expr = safe_expr.replace(key, str(value))
-                
-                # Use ast.literal_eval for safe evaluation
-                result = ast.literal_eval(safe_expr)
-                return str(result)
+                return evaluate_numeric_expression(expr)
             except Exception:
-                # If evaluation fails, return the original expression
+                return data
+
+        def replace_expression(match: re.Match[str]) -> str:
+            expr = match.group(1).strip()
+            if expr in params:
+                return str(params[expr])
+            try:
+                return str(evaluate_numeric_expression(expr))
+            except Exception:
                 return match.group(0)
-        
-        result = re.sub(pattern, evaluate_expression, result)
-        return result
+
+        return re.sub(pattern, replace_expression, data)
     elif isinstance(data, dict):
         return {k: interpolate_params(v, params) for k, v in data.items()}
     elif isinstance(data, list):

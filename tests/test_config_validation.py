@@ -5,9 +5,9 @@ from pathlib import Path
 import torch
 from safetensors.torch import save_file as st_save
 
-from Utils.batch_processor import load_batch_config
-from Utils.config import load_config
-from Utils.validation import format_preflight_plan, validate_merge_request
+from xlfusion.batch_processor import load_batch_config
+from xlfusion.config import load_config
+from xlfusion.validation import format_preflight_plan, validate_merge_request
 
 
 def _save_model(path: Path, value: float, shape=(2, 2)) -> None:
@@ -37,8 +37,8 @@ class ConfigLoadingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             messages = []
             config = load_config(root=Path(tmp), reporter=messages.append)
-            self.assertEqual(config["app"]["version"], "2.1")
-            self.assertEqual(config["directories"]["models"], "models")
+            self.assertEqual(config["app"]["version"], "2.15")
+            self.assertEqual(config["directories"]["models"], "workspace/models")
             self.assertTrue(any("config.yaml not found" in message for message in messages))
 
     def test_partial_config_merges_with_defaults(self) -> None:
@@ -51,7 +51,7 @@ class ConfigLoadingTests(unittest.TestCase):
             config = load_config(root=root, reporter=None)
             self.assertEqual(config["model_output"]["base_name"], "CustomFusion")
             self.assertEqual(config["app"]["tool_name"], "LabFusion")
-            self.assertEqual(config["directories"]["metadata"], "metadata")
+            self.assertEqual(config["directories"]["metadata"], "workspace/metadata")
 
     def test_invalid_yaml_falls_back_to_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 from safetensors.torch import save_file as st_save
 
-from Utils.merge import stream_weighted_merge_from_paths, merge_perres, merge_hybrid, MergeCancelled
+from xlfusion.merge import stream_weighted_merge_from_paths, merge_perres, merge_hybrid, MergeCancelled
 
 
 def _make_small_state(val: float) -> dict:

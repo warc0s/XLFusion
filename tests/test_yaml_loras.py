@@ -1,7 +1,7 @@
 import unittest
 import yaml
 
-from Utils.config import generate_batch_config_yaml
+from xlfusion.config import generate_batch_config_yaml
 
 
 class YamlLorasTests(unittest.TestCase):

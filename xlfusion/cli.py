@@ -73,9 +73,9 @@ def pick_backbone(names: List[str], weights: Optional[List[float]] = None) -> in
 
 def prompt_block_merge(names: List[str]) -> Optional[List[Dict[str, float]]]:
     """
-    Ask for per-block multipliers per model for Legacy mode.
+    Ask for coarse per-block multipliers per model for Legacy mode.
 
-    Supports N models. For each block (down_0_1, down_2_3, mid, up_0_1, up_2_3)
+    Supports N models. For each coarse block (down, mid, up)
     request weights per model as comma-separated pairs idx:weight.
     If left empty, per-block configuration is skipped.
 
@@ -84,9 +84,9 @@ def prompt_block_merge(names: List[str]) -> Optional[List[Dict[str, float]]]:
     """
     print("\nPer-block multipliers (optional):")
     print("For each block, enter per-model weights like 0:1.0,1:0.5,2:0.0")
-    print("Available blocks: down_0_1, down_2_3, mid, up_0_1, up_2_3")
+    print("Available blocks: down, mid, up")
 
-    blocks = ['down_0_1', 'down_2_3', 'mid', 'up_0_1', 'up_2_3']
+    blocks = ['down', 'mid', 'up']
     per_model: List[Dict[str, float]] = [{ } for _ in names]
 
     any_set = False

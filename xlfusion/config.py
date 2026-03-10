@@ -23,15 +23,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "base_name": "XLFusion",
         "version_prefix": "V",
         "file_extension": ".safetensors",
-        "output_dir": "output",
-        "metadata_dir": "metadata",
+        "output_dir": "workspace/output",
+        "metadata_dir": "workspace/metadata",
         "auto_version": True,
     },
     "directories": {
-        "models": "models",
-        "loras": "loras",
-        "output": "output",
-        "metadata": "metadata",
+        "models": "workspace/models",
+        "loras": "workspace/loras",
+        "output": "workspace/output",
+        "metadata": "workspace/metadata",
     },
     "merge_defaults": {
         "legacy": {
@@ -52,7 +52,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "app": {
         "tool_name": "XLFusion",
-        "version": "2.1",
+        "version": "2.15",
     },
 }
 
@@ -208,11 +208,11 @@ def list_safetensors(folder: Path) -> List[Path]:
     return sorted([p for p in folder.glob("*.safetensors") if p.is_file()])
 
 
-def next_version_path(output_dir: Path) -> Tuple[Path, int]:
+def next_version_path(output_dir: Path, *, base_name_override: Optional[str] = None) -> Tuple[Path, int]:
     config = load_config(root=output_dir.parent, reporter=None)
     output_cfg = config["model_output"]
 
-    base_name = output_cfg["base_name"]
+    base_name = base_name_override or output_cfg["base_name"]
     version_prefix = output_cfg["version_prefix"]
     file_extension = output_cfg["file_extension"]
 

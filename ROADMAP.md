@@ -1,6 +1,6 @@
 # XLFusion Roadmap
 
-Estado actual: `main` ya cubre V2.1 con CLI, GUI, batch, analisis, metadatos reproducibles, validacion comun y preflight. Este roadmap recoge solo mejoras futuras que todavia aportan valor real a la aplicacion.
+Estado actual: `main` ya cubre V2.15 con CLI, GUI, batch, analisis, metadatos reproducibles, validacion comun, preflight y la reorganizacion a `xlfusion/` + `workspace/`. Este roadmap recoge solo mejoras futuras que todavia aportan valor real a la aplicacion.
 
 ## Principios para siguientes versiones
 
@@ -8,7 +8,6 @@ Estado actual: `main` ya cubre V2.1 con CLI, GUI, batch, analisis, metadatos rep
 - Mejorar memoria y tiempos sin sacrificar reproducibilidad.
 - Unificar experiencia entre CLI, GUI y batch.
 - Convertir el analisis en ayuda real para tomar decisiones de mezcla.
-
 ## V2.2 Flujo experto y alto rendimiento
 
 Objetivo: hacer que XLFusion escale mejor en memoria, sea mas rapido y permita reutilizar configuraciones complejas sin friccion.
@@ -50,7 +49,7 @@ Criterio de aceptacion:
 
 ### 5. Recuperacion desde metadatos
 
-- Añadir comando para reconstruir una ejecucion a partir de `metadata/meta_*`.
+- Añadir comando para reconstruir una ejecucion a partir de `workspace/metadata/meta_*`.
 - Rehidratar configuracion exacta, entradas y nombre de salida propuesto.
 - Señalar diferencias si faltan modelos o LoRAs originales.
 

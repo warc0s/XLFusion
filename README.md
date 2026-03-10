@@ -1,6 +1,6 @@
 # XLFusion
 
-XLFusion is a Python tool for merging SDXL checkpoints with a reproducible workflow across CLI, GUI, and batch execution. It focuses on reliable validation, per-block control, LoRA baking, metadata you can recreate later, and lightweight analysis before or after a merge.
+XLFusion is a Python tool for merging SDXL checkpoints with a reproducible workflow across CLI, GUI, and batch execution. As of V2.15, the product code lives in `xlfusion/` and the user runtime lives in `workspace/`. It focuses on reliable validation, per-block control, LoRA baking, metadata you can recreate later, and lightweight analysis before or after a merge.
 
 ## What It Does
 
@@ -47,19 +47,20 @@ XLFusion/
 ├── gui_app.py
 ├── config.yaml
 ├── config.yaml.example
-├── Utils/
-├── models/
-├── loras/
-├── output/
-├── metadata/
+├── xlfusion/
+├── workspace/
+│   ├── models/
+│   ├── loras/
+│   ├── output/
+│   └── metadata/
 ├── scripts/
 └── tests/
 ```
 
 ## Basic Usage
 
-1. Place input checkpoints in `models/`.
-2. Place optional LoRAs in `loras/`.
+1. Place input checkpoints in `workspace/models/`.
+2. Place optional LoRAs in `workspace/loras/`.
 3. Run one of the entry points below.
 
 Interactive CLI:
@@ -116,7 +117,7 @@ See:
 
 - `batch_config_example.yaml`
 - `tests/test_batch_full.yaml`
-- `Utils/templates.py`
+- `xlfusion/templates.py`
 
 Shortcuts:
 
@@ -125,9 +126,9 @@ Shortcuts:
 
 ## Outputs and Metadata
 
-Merged checkpoints are written to `output/` as versioned `.safetensors` files.
+Merged checkpoints are written to `workspace/output/` as versioned `.safetensors` files.
 
-Each run also creates a metadata folder in `metadata/` containing:
+Each run also creates a metadata folder in `workspace/metadata/` containing:
 
 - `metadata.txt`
 - `batch_config.yaml`
@@ -161,7 +162,7 @@ The smoke test generates synthetic models, runs a bounded batch scenario, and re
 
 ## Future Work
 
-`ROADMAP.md` now starts after the already implemented validation and preflight foundation. The remaining roadmap focuses on performance, reusable presets, metadata recovery, and deeper merge analysis.
+`ROADMAP.md` now starts after the already implemented package/runtime reorganization and validation foundation. The remaining roadmap focuses on performance, reusable presets, metadata recovery, and deeper merge analysis.
 
 ## Credits
 

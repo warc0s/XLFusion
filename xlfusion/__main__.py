@@ -1,9 +1,8 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import sys
 
-from xlfusion.app import main
+from .app import main
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# XLFusion V2.1 Configuration
+# XLFusion V2.15 Configuration
 # =====================================
 # Centralized configuration for XLFusion checkpoint merger
 # This file controls all aspects of model merging behavior, naming, and output
@@ -22,10 +22,10 @@ model_output:
   file_extension: ".safetensors"
 
   # Directory where merged models will be saved
-  output_dir: "output"
+  output_dir: "workspace/output"
 
   # Directory where merge metadata and audit logs are stored
-  metadata_dir: "metadata"
+  metadata_dir: "workspace/metadata"
 
   # Automatically increment version numbers to prevent overwriting existing models
   # true = auto-detect next version | false = requires manual version specification
@@ -38,16 +38,16 @@ model_output:
 # Defines the folder structure used by XLFusion
 directories:
   # Input checkpoint files (.safetensors) - place your base SDXL models here
-  models: "models"
+  models: "workspace/models"
 
   # LoRA files (.safetensors) - only used in Legacy mode for LoRA baking
-  loras: "loras"
+  loras: "workspace/loras"
 
   # Output directory for merged models - final results saved here
-  output: "output"
+  output: "workspace/output"
 
   # Metadata and audit logs - detailed merge information for reproducibility
-  metadata: "metadata"
+  metadata: "workspace/metadata"
 
 
 # =====================================
@@ -101,5 +101,5 @@ app:
   tool_name: "XLFusion"
 
   # Application version - recorded in metadata for merge reproducibility
-  # Format: "major.minor" (e.g., "1.0", "1.1", "2.1")
-  version: "2.1"
+  # Format: "major.minor" (e.g., "1.0", "2.15")
+  version: "2.15"

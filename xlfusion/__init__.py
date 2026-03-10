@@ -1,9 +1,4 @@
-"""
-XLFusion Utils Module
-
-This module contains all utility functions and classes for XLFusion,
-organized by functionality for better maintainability.
-"""
+"""Public package surface for XLFusion."""
 
 # Config utilities
 from .config import load_config, ensure_dirs, list_safetensors, next_version_path

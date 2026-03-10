@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 
-from Utils.workflow import save_merge_results
+from xlfusion.workflow import save_merge_results
 
 
 class WorkflowTests(unittest.TestCase):
