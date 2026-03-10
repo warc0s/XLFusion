@@ -1,200 +1,169 @@
-# XLFusion V2.1
+# XLFusion
 
-Professional SDXL checkpoint merger with CLI and GUI, focused on reproducibility, per-block control, and batch workflows. It includes three merge modes (Legacy, PerRes, and Hybrid), LoRA baking, advanced analysis, complete metadata, and a shared validation/preflight layer before execution.
+XLFusion is a Python tool for merging SDXL checkpoints with a reproducible workflow across CLI, GUI, and batch execution. It focuses on reliable validation, per-block control, LoRA baking, metadata you can recreate later, and lightweight analysis before or after a merge.
 
-## Current Capabilities
+## What It Does
 
-- Native GUI (Tk) with a step-by-step assistant and per-block preview.
-- Hybrid mode: per-block assignment + weighted mixing.
-- Batch processing with validation, logs, and reproducible YAML.
-- Analysis tools (diff, compatibility, prediction, recommendations).
-- Enriched metadata: BLAKE2 hashes of inputs, self-contained YAML, and automatic versioning.
-- Robust `config.yaml` loading with safe defaults, partial overrides, and clear fallback messages.
-- Shared validation for CLI, GUI, and batch so invalid configurations never reach the merge engine.
-- Real preflight plan before execution with estimated memory, effective locks, affected blocks, and compatibility warnings.
-- Preflight export to `.txt` or `.json` from CLI and GUI.
+- Merge SDXL-derived `.safetensors` checkpoints in three modes: `legacy`, `perres`, and `hybrid`
+- Bake LoRAs into the merged result
+- Validate configurations before execution in CLI, GUI, and batch
+- Show a preflight plan with estimated memory, backbone, affected blocks, effective locks, and compatibility warnings
+- Save reproducible metadata and a batch YAML that can recreate the run
+- Analyze similarity, compatibility, and likely merge characteristics
 
 ## Merge Modes
 
-- Legacy (classic weighted)
-  - Global weights per model, optional coarse per-block control `down/mid/up` and group multipliers `down_0_1`, `down_2_3`, `mid`, `up_0_1`, `up_2_3`.
-  - Cross-attention boost (improves prompt adherence).
-  - LoRA baking into the result.
-  - Memory-optimized streaming process.
+- `legacy`
+  Weighted merge across selected models with optional coarse `down/mid/up` multipliers and cross-attention boosts.
 
-- PerRes (by resolution)
-  - 100% assignment per block group: `down_0_1`, `down_2_3`, `mid`, `up_0_1`, `up_2_3`.
-  - Optional cross-attention locks (`down/mid/up`).
+- `perres`
+  Full assignment by block group: `down_0_1`, `down_2_3`, `mid`, `up_0_1`, `up_2_3`.
 
-- Hybrid (PerRes + mixing)
-  - Define per-block weights per model (sum ≈ 1.0), with lock support.
-  - Ideal for transferring style in `up_*` while preserving composition in `down_*`.
+- `hybrid`
+  Per-block weighted mixing with optional attention locks. Useful for moving style into `up_*` while preserving composition in `down_*`.
 
-Technical compatibility:
-- SDXL-derived models (NoobAI, Illustrious, Pony, etc.).
-- `.safetensors` inputs/outputs compatible with A1111/ComfyUI.
+## Requirements
 
-## Requirements and Installation
+- Python 3.10+
+- Packages from `requirements.txt`
 
-Requires Python 3.10+ and the packages listed in `requirements.txt`:
-
-```
+```bash
 pip install -r requirements.txt
 ```
 
-Main packages: `torch`, `safetensors`, `PyYAML`, `numpy`, `tqdm`, `psutil`.
+Main dependencies: `torch`, `safetensors`, `PyYAML`, `numpy`, `tqdm`, `psutil`.
 
-Configuration notes:
+## Configuration
+
 - `config.yaml` is optional.
-- Copy `config.yaml.example` to `config.yaml` if you want local overrides.
-- If `config.yaml` is missing or invalid, XLFusion starts with built-in safe defaults.
+- `config.yaml.example` is the distributable template.
+- If `config.yaml` is missing, invalid, or partially defined, XLFusion falls back to safe built-in defaults.
 
-Note: If you package the GUI on Windows, also install `pyinstaller` and use `scripts/build_gui_exe.py`.
+## Project Layout
 
-## Folder Structure
-
-```
+```text
 XLFusion/
-├── XLFusion.py                 # Main CLI entry point
-├── gui_app.py                  # Graphical interface
-├── config.yaml                 # Centralized configuration
-├── config.yaml.example         # Optional distributable config template
-├── Utils/                      # Internal modules (merge, lora, batch, analyzer, ...)
-├── models/                     # Input checkpoints (.safetensors)
-├── loras/                      # Optional LoRAs (.safetensors)
-├── output/                     # Merged results
-├── metadata/                   # Metadata and audit logs
-├── scripts/                    # Utilities (batch, smoke, build exe)
-└── tests/                      # Unit tests
+├── XLFusion.py
+├── gui_app.py
+├── config.yaml
+├── config.yaml.example
+├── Utils/
+├── models/
+├── loras/
+├── output/
+├── metadata/
+├── scripts/
+└── tests/
 ```
 
-## Quick Start (Interactive CLI)
+## Basic Usage
 
-1) Place `.safetensors` models in `models/` and (optionally) LoRAs in `loras/`.
-2) Run:
+1. Place input checkpoints in `models/`.
+2. Place optional LoRAs in `loras/`.
+3. Run one of the entry points below.
 
-```
+Interactive CLI:
+
+```bash
 python XLFusion.py
 ```
 
-3) Select models, choose the merge mode, and adjust configuration.
-4) The result is saved in `output/` and the audit in `metadata/`.
+GUI:
 
-## GUI (Graphical Assistant)
-
-Launch the GUI with:
-
-```
+```bash
 python XLFusion.py --gui
 ```
 
-GUI features:
-- Model library with size, multi-selection, and sorting.
-- Mode-guided configuration (Legacy, PerRes, Hybrid) and LoRAs.
-- Per-block preview with weights/assignments.
-- Fusion plan preview with exportable preflight report.
-- Real progress and safe cancellation.
+Batch:
 
-## Batch Processing
-
-Define multiple jobs in a `YAML` and process them sequentially with validation and logs.
-
-- Run batch:
-
-```
+```bash
 python XLFusion.py --batch batch_config_example.yaml
-```
-
-- Validate only:
-
-```
 python XLFusion.py --batch batch_config_example.yaml --validate-only
 ```
 
-See `batch_config_example.yaml` and `tests/test_batch_full.yaml` for examples of:
-- Legacy with `weights`, `block_multipliers`, `crossattn_boosts`, and `loras`.
-- PerRes with `assignments` and `attn2_locks`.
-- Hybrid with `hybrid_config` and `attn2_locks`.
+Analysis:
 
-There are also templates in `Utils/templates.py` and a `templates` section in the example YAML.
-
-Batch validation now reuses the same shared validator as CLI and GUI, including memory and compatibility warnings.
-
-Shortcuts:
-- `scripts/run_batch.sh <config.yaml>`
-- `scripts/run_batch_validate.sh <config.yaml>`
-
-## Analysis Mode
-
-Tools to understand differences, compatibility, and predict merge characteristics.
-
-Examples:
-
-```
-# Comparison between two models (by shown index)
+```bash
 python XLFusion.py --analyze --compare 0 1
-
-# Recommendations for a specific goal
 python XLFusion.py --analyze --recommend balanced
-
-# Export report to JSON
 python XLFusion.py --analyze --compare 0 1 --export-analysis report.json
 ```
 
-Key metrics: cosine similarity per block, relative changes, architecture warnings, compatibility score, and recommendations.
+## CLI and GUI Workflow
 
-## Configuration (`config.yaml`)
+The interactive flows now share the same execution guardrails:
 
-Centralizes the output name, versioning, paths, and defaults.
+- configuration is validated before merge execution
+- invalid values do not reach `merge_*`
+- a preflight plan is shown before running
+- the preflight can be exported to `.txt` or `.json`
 
-- `model_output`:
-  - `base_name`: output filename prefix (e.g., `XLFusion_V1.safetensors`).
-  - `version_prefix`: `V`, `v`, `Ver`, etc.
-  - `file_extension`: always `.safetensors`.
-  - `output_dir`, `metadata_dir`, `auto_version`.
+The GUI also provides:
 
-- `directories`:
-  - `models`, `loras`, `output`, `metadata`.
+- model list with size and timestamps
+- per-block visual preview
+- real-time progress and cancellation
 
-- `merge_defaults`:
-  - `legacy`: default multipliers and `cross_attention_boost`.
-  - `perres`: default `cross_attention_locks`.
-  - `hybrid`: auto-normalization, minimum weights, default locks.
+## Batch Workflow
 
-- `app`:
-  - `tool_name`, `version` (included in metadata).
+Batch mode uses the same validator as CLI and GUI. That means:
 
-## Output and Metadata
+- file existence is checked before merge execution
+- weights, assignments, locks, backbone and LoRAs are validated centrally
+- memory and compatibility warnings are available during validation
 
-- Models: `XLFusion_V{n}.safetensors` in `output/`.
-- Metadata: folder `metadata/meta_{n}/` with:
-  - `metadata.txt`: human-readable summary, BLAKE2 hashes of inputs (models and LoRAs), and exact kwargs.
-  - `batch_config.yaml`: reproducible job configuration to recreate the result.
+See:
 
-Metadata is also embedded in the `.safetensors` file itself.
+- `batch_config_example.yaml`
+- `tests/test_batch_full.yaml`
+- `Utils/templates.py`
 
-## Best Practices and Performance
+Shortcuts:
 
-- Check the estimated memory notice before large merges.
-- In Legacy, normalize weights; use `block_multipliers` and `crossattn_boosts` to fine-tune behavior.
-- With PerRes/Hybrid, use `attn2_locks` for text consistency.
-- The streaming mode avoids loading everything into GPU/CPU at once.
+- `scripts/run_batch.sh <config.yaml>`
+- `scripts/run_batch_validate.sh <config.yaml>`
 
-## Tests and Smoke Test
+## Outputs and Metadata
 
-This repo includes unit tests in `tests/` and an automated smoke test that generates synthetic models and cleans up artifacts:
+Merged checkpoints are written to `output/` as versioned `.safetensors` files.
 
+Each run also creates a metadata folder in `metadata/` containing:
+
+- `metadata.txt`
+- `batch_config.yaml`
+
+The saved metadata includes source models, hashes, mode, backbone, and merge parameters. Metadata is also embedded in the resulting `.safetensors` file.
+
+## Analysis
+
+The analysis tools are meant to support merge decisions, not just report raw numbers. Current outputs include:
+
+- cosine similarity by block
+- compatibility score and architecture warnings
+- difference summaries
+- prediction and recommendation helpers
+
+## Validation and Testing
+
+Main validation command:
+
+```bash
+python -m unittest discover -s tests -p 'test_*.py'
 ```
+
+Smoke test:
+
+```bash
 scripts/smoke_test.sh
 ```
 
-The script creates test models, runs a batch with 4 jobs, and removes temporary artifacts at the end.
+The smoke test generates synthetic models, runs a bounded batch scenario, and removes temporary artifacts afterwards.
 
-## Roadmap
+## Future Work
 
-See `ROADMAP.md` for future work after V2.1: performance, presets, recovery from metadata, and deeper analysis.
+`ROADMAP.md` now starts after the already implemented validation and preflight foundation. The remaining roadmap focuses on performance, reusable presets, metadata recovery, and deeper merge analysis.
 
-## Credits and Contact
+## Credits
 
 - Portfolio: https://warcos.dev/
 - LinkedIn: https://www.linkedin.com/in/marcosgarest/
