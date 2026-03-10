@@ -200,3 +200,6 @@ opencode.json
 
 # Local agent metadata/config
 AGENTS.md
+
+# Windows alternate data stream sidecars
+*:Zone.Identifier
