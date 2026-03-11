@@ -522,12 +522,33 @@ def generate_analysis_report(results: Dict[str, Any]) -> str:
 
 
 def export_analysis_json(results: Dict[str, Any], output_path: Path) -> None:
-    serializable: Dict[str, Any] = {}
-    for key, value in results.items():
+    def _to_jsonable(value: Any) -> Any:
         if hasattr(value, "__dataclass_fields__"):
-            serializable[key] = asdict(value)
-        elif isinstance(value, list) and value and hasattr(value[0], "__dataclass_fields__"):
-            serializable[key] = [asdict(item) for item in value]
-        else:
-            serializable[key] = value
-    output_path.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
+            value = asdict(value)
+
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        if isinstance(value, dict):
+            converted: Dict[str, Any] = {}
+            for k, v in value.items():
+                key = k if isinstance(k, str) else str(k)
+                converted[key] = _to_jsonable(v)
+            return converted
+        if isinstance(value, (list, tuple)):
+            return [_to_jsonable(item) for item in value]
+        if isinstance(value, set):
+            return [_to_jsonable(item) for item in sorted(value, key=lambda item: str(item))]
+
+        try:  # Optional numpy support
+            import numpy as np  # type: ignore
+
+            if isinstance(value, np.ndarray):
+                return value.tolist()
+        except Exception:
+            pass
+
+        return str(value)
+
+    output_path.write_text(json.dumps(_to_jsonable(results), indent=2), encoding="utf-8")
