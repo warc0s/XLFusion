@@ -13,6 +13,8 @@ Current status: `main` already covers the package/runtime reorganization, shared
 
 Goal: build a broad and useful test base that covers the code already in place so regressions are detected much earlier on every change.
 
+Status: implemented on `main` (2026-03-11) by expanding the unittest suite with additional contract coverage (blocks/execution/memory/batch runner) and a metadata recovery roundtrip test.
+
 ### 1. Cover Every Relevant Module In The Current Product
 
 - Review `xlfusion/` module by module and add tests wherever coverage is currently missing or clearly insufficient.
@@ -60,4 +62,5 @@ Acceptance criteria:
 
 ## Recommended Priorities
 
-1. V2.5 Full Coverage Of The Current Product
+1. Keep V2.5 coverage healthy (add regressions as bugs are found)
+2. Define V2.6+ reliability goals

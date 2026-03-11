@@ -146,7 +146,7 @@ See:
 
 - `batch_config_example.yaml`
 - `tests/test_batch_full.yaml`
-- `xlfusion/templates.py`
+- `xlfusion/batch_schema.py` (template interpolation and batch schema)
 
 Shortcuts:
 
@@ -188,11 +188,13 @@ Smoke test:
 scripts/smoke_test.sh
 ```
 
-The smoke test generates synthetic models, runs a bounded batch scenario, and removes temporary artifacts afterwards.
+The unittest suite is intended to stay fast and run on every change. The smoke test generates synthetic models, runs a bounded batch scenario, and removes temporary artifacts afterwards.
 
 ## Future Work
 
-`ROADMAP.md` now starts after the already implemented package/runtime reorganization, shared validation and preflight, actionable analysis, checkpoint algebra, explicit component scope, low-memory execution, presets, metadata recovery, and the V2.4 platform refactor (shared merge runtime, shared internal types, and a block-mapping registry). The remaining roadmap focuses on broader regression coverage for the existing product.
+`ROADMAP.md` tracks future improvements after the already implemented package/runtime reorganization, shared validation and preflight, actionable analysis, checkpoint algebra, explicit component scope, low-memory execution, presets, metadata recovery, and the V2.4 platform refactor (shared merge runtime, shared internal types, and a block-mapping registry).
+
+The current roadmap focus (V2.5) is stability via broad automated regression coverage of the existing product.
 
 ## Credits
 

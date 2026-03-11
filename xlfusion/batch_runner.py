@@ -64,6 +64,7 @@ class BatchProcessor:
 
         for job in self.config.batch_jobs:
             job_start = time.time()
+            stop_after_error = False
             try:
                 self.logger.info(f"Processing job: {job.name}")
                 if job.preflight:
@@ -86,7 +87,7 @@ class BatchProcessor:
                 self.logger.error(f"Job {job.name} failed: {exc}")
                 if not self.config.global_settings.get("continue_on_error", True):
                     self.logger.error("Stopping batch due to error (continue_on_error=false)")
-                    break
+                    stop_after_error = True
 
             if progress_bar:
                 progress_bar.update(1)
@@ -106,6 +107,9 @@ class BatchProcessor:
                     "error": job.error_message if not job.success else None,
                 }
             )
+
+            if stop_after_error:
+                break
 
         if progress_bar:
             progress_bar.close()
