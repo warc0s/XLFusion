@@ -27,7 +27,7 @@ Requirements:
 from __future__ import annotations
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Sequence
 
 from .cli import (
     pick_backbone,
@@ -170,7 +170,7 @@ def analyze_mode(args, models_dir: Path, output_dir: Path) -> int:
     return 0
 
 
-def main() -> int:
+def main(argv: Optional[Sequence[str]] = None) -> int:
     """Main orchestration function"""
     # Parse command line arguments
     import argparse
@@ -195,7 +195,7 @@ def main() -> int:
     parser.add_argument("--export-recovered", type=Path, metavar="PATH", help="Save the recovered batch YAML to a new path")
     parser.add_argument("--run-recovered", action="store_true", help="Execute the recovered batch job after inspection")
 
-    args = parser.parse_args()
+    args = parser.parse_args(list(argv) if argv is not None else None)
 
     # Setup directories
     context = resolve_app_context(Path(__file__).resolve().parent.parent)

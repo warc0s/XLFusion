@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional, Sequence
 
 from .batch_runner import BatchProcessor
 from .batch_schema import (
@@ -16,7 +17,7 @@ from .batch_schema import (
 from .config import resolve_app_context
 
 
-def main() -> int:
+def main(argv: Optional[Sequence[str]] = None) -> int:
     """Command line interface for batch processing."""
     import argparse
 
@@ -24,7 +25,7 @@ def main() -> int:
     parser.add_argument("config", type=Path, help="Batch configuration file")
     parser.add_argument("--validate-only", action="store_true", help="Only validate configuration, don't process")
     parser.add_argument("--template", help="Use specific template (overrides job templates)")
-    args = parser.parse_args()
+    args = parser.parse_args(list(argv) if argv is not None else None)
 
     if not args.config.exists():
         print(f"Error: Configuration file not found: {args.config}")
