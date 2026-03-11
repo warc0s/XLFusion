@@ -11,7 +11,7 @@ from tkinter import filedialog, ttk, messagebox
 
 from .config import AppContext, list_safetensors
 from .execution import execution_options_to_dict
-from .lora import apply_single_lora
+from .lora import apply_single_lora_with_report
 from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
 from .presets import (
     batch_job_to_runtime_state,
@@ -814,6 +814,9 @@ class FusionGUI:
         self.execution_mode_var = tk.StringVar(value="low-memory")
         self.progress_mode_var = tk.StringVar(value="auto")
         self.progress_every_var = tk.StringVar(value="250")
+        self.include_vae_var = tk.BooleanVar(value=False)
+        self.include_text_encoder_var = tk.BooleanVar(value=False)
+        self.include_other_var = tk.BooleanVar(value=False)
 
         self._build_layout()
         self._load_resources()
@@ -1054,6 +1057,12 @@ class FusionGUI:
         ttk.Entry(execution_frame, textvariable=self.progress_every_var, width=8).grid(
             row=1, column=5, padx=4, pady=4, sticky="w"
         )
+        ttk.Label(execution_frame, text="Non-UNet scope").grid(row=2, column=0, padx=4, pady=4, sticky="nw")
+        scope_box = ttk.Frame(execution_frame)
+        scope_box.grid(row=2, column=1, columnspan=5, padx=4, pady=4, sticky="w")
+        ttk.Checkbutton(scope_box, text="Include VAE", variable=self.include_vae_var).pack(side="left")
+        ttk.Checkbutton(scope_box, text="Include text encoder", variable=self.include_text_encoder_var).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(scope_box, text="Include other tensors", variable=self.include_other_var).pack(side="left", padx=(8, 0))
 
         self.run_summary = ttk.Label(frame, text="Ready to run")
         self.run_summary.pack(anchor="w", pady=(4, 8))
@@ -1181,6 +1190,7 @@ class FusionGUI:
     def _build_validation(self):
         mode: str = self.state.get("mode", "legacy")
         model_paths: List[Path] = list(self.state.get("model_paths", []))
+        only_unet, component_policy = self._get_component_scope_config(mode)
 
         if mode == "legacy":
             config = self.legacy_panel.get_config()
@@ -1194,6 +1204,8 @@ class FusionGUI:
                 crossattn_boosts=config.get("crossattn_boosts"),
                 loras=config.get("loras"),
                 loras_dir=self.loras_dir,
+                only_unet=only_unet,
+                component_policy=component_policy,
             )
 
         if mode == "perres":
@@ -1209,6 +1221,8 @@ class FusionGUI:
                 attn2_locks=config.get("attn2_locks"),
                 loras=config.get("loras"),
                 loras_dir=self.loras_dir,
+                only_unet=only_unet,
+                component_policy=component_policy,
             )
 
         config = self.hybrid_panel.get_config()
@@ -1221,7 +1235,38 @@ class FusionGUI:
             attn2_locks=config.get("attn2_locks"),
             loras=config.get("loras"),
             loras_dir=self.loras_dir,
+            only_unet=only_unet,
+            component_policy=component_policy,
         )
+
+    def _set_component_scope_for_mode(self, mode: str, config: Optional[Dict[str, object]] = None) -> None:
+        config = config or {}
+        if config.get("component_policy"):
+            policy = config.get("component_policy") or {}
+            self.include_vae_var.set(policy.get("vae") != "exclude")
+            self.include_text_encoder_var.set(policy.get("text_encoder") != "exclude")
+            self.include_other_var.set(policy.get("other") != "exclude")
+            return
+        only_unet = bool(config.get("only_unet")) if "only_unet" in config else (mode == "legacy")
+        if only_unet:
+            self.include_vae_var.set(False)
+            self.include_text_encoder_var.set(False)
+            self.include_other_var.set(False)
+            return
+        default_include = mode != "legacy"
+        self.include_vae_var.set(default_include)
+        self.include_text_encoder_var.set(default_include)
+        self.include_other_var.set(default_include)
+
+    def _get_component_scope_config(self, mode: str) -> tuple[bool, Dict[str, str]]:
+        include_action = "merge" if mode == "legacy" else "backbone"
+        component_policy = {
+            "vae": include_action if self.include_vae_var.get() else "exclude",
+            "text_encoder": include_action if self.include_text_encoder_var.get() else "exclude",
+            "other": include_action if self.include_other_var.get() else "exclude",
+        }
+        only_unet = all(action == "exclude" for action in component_policy.values())
+        return only_unet, component_policy
 
     def _get_execution_config(self) -> Dict[str, object]:
         try:
@@ -1258,6 +1303,7 @@ class FusionGUI:
         self.mode_var.set(mode)
         self.state["mode"] = mode
         self.state[mode] = runtime.get("config", {})
+        self._set_component_scope_for_mode(mode, self.state[mode] if isinstance(self.state[mode], dict) else None)
 
         execution = runtime.get("execution", {}) or {}
         execution = execution_options_to_dict(execution)
@@ -1321,6 +1367,7 @@ class FusionGUI:
             return
 
         execution = self._get_execution_config()
+        only_unet, component_policy = self._get_component_scope_config(str(self.state.get("mode", "legacy")))
         loras = [
             {"file": item["file"], "scale": item["scale"]}
             for item in validation.normalized.get("loras", [])
@@ -1342,6 +1389,8 @@ class FusionGUI:
                 block_multipliers=validation.normalized.get("block_multipliers"),
                 crossattn_boosts=validation.normalized.get("crossattn_boosts"),
                 loras=loras,
+                only_unet=only_unet,
+                component_policy=component_policy,
             )
         except Exception as exc:
             messagebox.showerror("Preset error", str(exc))
@@ -1418,16 +1467,19 @@ class FusionGUI:
             existing = self.state.get("legacy")
             self.legacy_panel.refresh(model_names, self.lora_paths, existing)
             self.legacy_panel.pack(fill="both", expand=True)
+            self._set_component_scope_for_mode(mode, existing if isinstance(existing, dict) else None)
         elif mode == "perres":
             self.config_hint.config(text="Assign each resolution block to a model.")
             existing = self.state.get("perres")
             self.perres_panel.refresh(model_names, self.lora_paths, existing)
             self.perres_panel.pack(fill="both", expand=True)
+            self._set_component_scope_for_mode(mode, existing if isinstance(existing, dict) else None)
         else:
             self.config_hint.config(text="Configure custom per-block weights.")
             existing = self.state.get("hybrid")
             self.hybrid_panel.refresh(model_names, self.lora_paths, existing)
             self.hybrid_panel.pack(fill="both", expand=True)
+            self._set_component_scope_for_mode(mode, existing if isinstance(existing, dict) else None)
 
     def _update_preview(self) -> None:
         self.preview_canvas.delete("all")
@@ -1500,6 +1552,7 @@ class FusionGUI:
                     f"Mode: {plan.mode} | Backbone: {plan.backbone_name} | "
                     f"Models used: {', '.join(plan.selected_models)} | "
                     f"Estimated memory: {plan.estimated_memory_gb:.2f} GB | "
+                    f"Scope: {'UNet only' if plan.only_unet else 'UNet + selected components'} | "
                     f"Execution: {execution['mode']} | Output: {self.output_name_var.get().strip() or 'default'}"
                 )
             )
@@ -1569,6 +1622,9 @@ class FusionGUI:
             mode: str = self.state.get("mode", "legacy")
             execution = self._get_execution_config()
             output_name = self.output_name_var.get().strip() or None
+            only_unet = bool(validation.normalized.get("only_unet"))
+            component_policy = validation.normalized.get("component_policy")
+            lora_reports = []
 
             if len(model_paths) < 2:
                 raise RuntimeError("At least two models are required to merge.")
@@ -1590,7 +1646,8 @@ class FusionGUI:
                     model_paths,
                     weights,
                     backbone_idx,
-                    only_unet=True,
+                    only_unet=only_unet,
+                    component_policy=component_policy,
                     block_multipliers=block_multipliers,
                     crossattn_boosts=cross_boosts,
                     execution=execution,
@@ -1598,10 +1655,15 @@ class FusionGUI:
                     cancel_event=self.cancel_event,
                 )
                 for lora_spec in validation.normalized.get("loras", []):
-                    applied, skipped = apply_single_lora(merged, lora_spec["path"], lora_spec["scale"])
-                    self.log_queue.put(("info", f"LoRA {lora_spec['file']}: applied {applied}, skipped {skipped}"))
+                    report = apply_single_lora_with_report(merged, lora_spec["path"], lora_spec["scale"])
+                    lora_reports.append(report.to_dict())
+                    self.log_queue.put(("info", f"LoRA {lora_spec['file']}: applied {report.applied_pairs}, skipped {report.skipped_pairs}"))
 
-                yaml_kwargs: Dict[str, object] = {"weights": weights}
+                yaml_kwargs: Dict[str, object] = {
+                    "weights": weights,
+                    "only_unet": only_unet,
+                    "component_policy": component_policy,
+                }
                 if block_multipliers:
                     yaml_kwargs["block_multipliers"] = block_multipliers
                 if cross_boosts:
@@ -1621,16 +1683,23 @@ class FusionGUI:
                     assignments,
                     backbone_idx,
                     attn2,
+                    only_unet=only_unet,
+                    component_policy=component_policy,
                     execution=execution,
                     progress_cb=on_progress,
                     cancel_event=self.cancel_event,
                 )
 
                 for lora_spec in validation.normalized.get("loras", []):
-                    applied, skipped = apply_single_lora(merged, lora_spec["path"], lora_spec["scale"])
-                    self.log_queue.put(("info", f"LoRA {lora_spec['file']}: applied {applied}, skipped {skipped}"))
+                    report = apply_single_lora_with_report(merged, lora_spec["path"], lora_spec["scale"])
+                    lora_reports.append(report.to_dict())
+                    self.log_queue.put(("info", f"LoRA {lora_spec['file']}: applied {report.applied_pairs}, skipped {report.skipped_pairs}"))
 
-                yaml_kwargs = {"assignments": assignments}
+                yaml_kwargs = {
+                    "assignments": assignments,
+                    "only_unet": only_unet,
+                    "component_policy": component_policy,
+                }
                 if attn2:
                     yaml_kwargs["attn2_locks"] = attn2
                 lora_yaml = []
@@ -1648,16 +1717,23 @@ class FusionGUI:
                     hybrid_cfg,
                     backbone_idx,
                     attn2,
+                    only_unet=only_unet,
+                    component_policy=component_policy,
                     execution=execution,
                     progress_cb=on_progress,
                     cancel_event=self.cancel_event,
                 )
 
                 for lora_spec in validation.normalized.get("loras", []):
-                    applied, skipped = apply_single_lora(merged, lora_spec["path"], lora_spec["scale"])
-                    self.log_queue.put(("info", f"LoRA {lora_spec['file']}: applied {applied}, skipped {skipped}"))
+                    report = apply_single_lora_with_report(merged, lora_spec["path"], lora_spec["scale"])
+                    lora_reports.append(report.to_dict())
+                    self.log_queue.put(("info", f"LoRA {lora_spec['file']}: applied {report.applied_pairs}, skipped {report.skipped_pairs}"))
 
-                yaml_kwargs = {"hybrid_config": hybrid_cfg}
+                yaml_kwargs = {
+                    "hybrid_config": hybrid_cfg,
+                    "only_unet": only_unet,
+                    "component_policy": component_policy,
+                }
                 if attn2:
                     yaml_kwargs["attn2_locks"] = attn2
                 lora_yaml = []
@@ -1681,6 +1757,7 @@ class FusionGUI:
                 execution=execution_options_to_dict(execution),
                 job_name=f"GUI_{mode}",
                 job_description="Interactive GUI run",
+                audit_sections={"lora_application": lora_reports} if lora_reports else None,
             )
 
             self.log_queue.put(("success", f"Merge completed: {output_path.name} (V{version})"))

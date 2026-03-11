@@ -16,7 +16,7 @@ except ImportError:
 from .batch_schema import BatchConfig, BatchJob
 from .config import AppContext, resolve_app_context
 from .execution import execution_options_to_dict
-from .lora import apply_single_lora
+from .lora import apply_single_lora_with_report
 from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
 from .validation import format_preflight_plan
 from .workflow import save_merge_results
@@ -125,7 +125,7 @@ class BatchProcessor:
         if merged_state is None:
             raise ValueError(f"Unsupported mode: {job.mode}")
 
-        self._apply_loras(job, merged_state)
+        lora_reports = self._apply_loras(job, merged_state)
 
         output_dir = self.context.output_dir / self.config.global_settings.get("output_base", "batch_output")
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -146,6 +146,7 @@ class BatchProcessor:
             execution=execution_options_to_dict(job.execution),
             job_name=job.name,
             job_description=job.description,
+            audit_sections={"lora_application": lora_reports} if lora_reports else None,
         )
         job.output_path = output_path
         job.version = version
@@ -161,7 +162,8 @@ class BatchProcessor:
                 job.model_paths,
                 job.weights,
                 job.backbone_idx,
-                only_unet=True,
+                only_unet=bool(job.only_unet) if job.only_unet is not None else True,
+                component_policy=job.component_policy,
                 block_multipliers=job.block_multipliers,
                 crossattn_boosts=job.crossattn_boosts,
                 execution=job.execution,
@@ -176,6 +178,8 @@ class BatchProcessor:
                 job.assignments,
                 job.backbone_idx,
                 job.attn2_locks,
+                only_unet=bool(job.only_unet),
+                component_policy=job.component_policy,
                 execution=job.execution,
             )
 
@@ -187,20 +191,28 @@ class BatchProcessor:
                 job.hybrid_config,
                 job.backbone_idx,
                 job.attn2_locks,
+                only_unet=bool(job.only_unet),
+                component_policy=job.component_policy,
                 execution=job.execution,
             )
 
         return None
 
-    def _apply_loras(self, job: BatchJob, merged_state: Dict[str, Any]) -> None:
+    def _apply_loras(self, job: BatchJob, merged_state: Dict[str, Any]) -> list[Dict[str, Any]]:
         if not job.loras:
-            return
+            return []
 
+        reports: list[Dict[str, Any]] = []
         for lora_spec in job.loras:
             lora_path = self.context.loras_dir / lora_spec["file"]
             scale = lora_spec.get("scale", 0.3)
-            applied, skipped = apply_single_lora(merged_state, lora_path, scale)
-            self.logger.info(f"Applied LoRA {lora_spec['file']}: {applied} applied, {skipped} skipped")
+            report = apply_single_lora_with_report(merged_state, lora_path, scale)
+            reports.append(report.to_dict())
+            self.logger.info(
+                f"Applied LoRA {lora_spec['file']}: {report.applied_pairs} applied, "
+                f"{report.skipped_pairs} skipped, by component={report.applied_by_component}"
+            )
+        return reports
 
     def _build_yaml_kwargs(self, job: BatchJob) -> Dict[str, Any]:
         yaml_kwargs: Dict[str, Any] = {}
@@ -227,4 +239,8 @@ class BatchProcessor:
             yaml_kwargs["loras"] = job.loras
         if job.execution:
             yaml_kwargs["execution"] = execution_options_to_dict(job.execution)
+        if job.only_unet is not None:
+            yaml_kwargs["only_unet"] = job.only_unet
+        if job.component_policy:
+            yaml_kwargs["component_policy"] = job.component_policy
         return yaml_kwargs

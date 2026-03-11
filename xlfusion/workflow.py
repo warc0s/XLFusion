@@ -1,6 +1,7 @@
 """Shared orchestration utilities between CLI and GUI."""
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple, List
@@ -54,6 +55,7 @@ def save_merge_results(
     execution: Optional[Dict[str, Any]] = None,
     job_name: Optional[str] = None,
     job_description: Optional[str] = None,
+    audit_sections: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Path, Path, int]:
     """Unified persistence of the merged model and auxiliary files.
 
@@ -131,6 +133,13 @@ def save_merge_results(
             fh.write("\nExecution:\n")
             for k, v in execution.items():
                 fh.write(f"  {k}: {v}\n")
+        if audit_sections:
+            fh.write("\nAudit:\n")
+            for section, payload in audit_sections.items():
+                fh.write(f"  {section}:\n")
+                formatted = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+                for line in formatted.splitlines():
+                    fh.write(f"    {line}\n")
 
     yaml_params = {
         "mode": mode,
@@ -141,6 +150,8 @@ def save_merge_results(
         "job_description": job_description or "Recreated from metadata backup",
         "output_name": output_base_name or _derive_output_base_name(output_path),
         "execution": execution,
+        "only_unet": yaml_kwargs.get("only_unet"),
+        "component_policy": yaml_kwargs.get("component_policy"),
     }
     yaml_params.update(yaml_kwargs)
 

@@ -3,7 +3,7 @@
 from .batch_processor import BatchProcessor, BatchValidator, load_batch_config
 from .config import AppContext, ensure_dirs, list_safetensors, load_config, resolve_app_context
 from .execution import execution_options_to_dict, normalize_execution_options
-from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
+from .merge import merge_hybrid, merge_perres, stream_checkpoint_algebra_from_paths, stream_weighted_merge_from_paths
 from .presets import inspect_recovery_source, load_single_job_preset, save_single_job_preset
 from .validation import export_preflight_plan, format_preflight_plan, validate_merge_request
 from .workflow import save_merge_results
@@ -27,6 +27,7 @@ __all__ = [
     "resolve_app_context",
     "save_single_job_preset",
     "save_merge_results",
+    "stream_checkpoint_algebra_from_paths",
     "stream_weighted_merge_from_paths",
     "validate_merge_request",
 ]

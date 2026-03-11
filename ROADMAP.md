@@ -1,6 +1,6 @@
 # XLFusion Roadmap
 
-Current status: `main` already covers V2.2 and V2.15 with CLI, GUI, batch mode, analysis, reproducible metadata, shared validation, preflight, batch-compatible presets, metadata recovery, and the `xlfusion/` + `workspace/` reorganization. This roadmap only tracks future improvements that still add real value to the product.
+Current status: `main` already covers the package/runtime reorganization, shared validation and preflight, actionable analysis, checkpoint algebra, explicit component scope, LoRA audit reporting, reproducible metadata, CLI/GUI/batch execution, presets, and metadata recovery. This roadmap only tracks future improvements that still add real value to the product.
 
 ## Principles For Upcoming Versions
 
@@ -8,59 +8,6 @@ Current status: `main` already covers V2.2 and V2.15 with CLI, GUI, batch mode, 
 - Improve memory usage and speed without sacrificing reproducibility.
 - Keep the experience aligned across CLI, GUI, and batch.
 - Turn analysis into something that actively helps users make better merge decisions.
-
-## V2.3 Merge Quality And Actionable Analysis
-
-Goal: move from "seeing data" to "making better merge decisions".
-
-### 1. Submodule And Layer Analysis
-
-- Extend the analyzer with metrics by submodule, histograms, and summaries by model region.
-- Better separate structure, semantics, and style so recommendations are not just based on a single global score.
-
-Acceptance criteria:
-- The report helps explain which model dominates composition, detail, and style.
-
-### 2. Weight And Block Recommender
-
-- Generate initial suggestions for `hybrid_config`, `assignments`, and backbone selection from analysis results.
-- Offer profiles such as `balanced`, `style transfer`, `detail recovery`, or `prompt fidelity`.
-
-Acceptance criteria:
-- The user can start from a reasonable proposal without configuring everything manually.
-
-### 3. Compatibility Alerts Before Merging
-
-- Detect potentially dangerous differences before execution: incompatible shapes, models that are too far apart, inconsistent locks, or combinations with low expected value.
-- Integrate those alerts into preflight and GUI.
-
-Acceptance criteria:
-- High-risk combinations are detected before spending time and memory on a failed or poor merge.
-
-### 4. Checkpoint Algebra
-
-- Add operations like `A + alpha(B - C)` and compatible variants for `legacy` and `hybrid`.
-- Reuse the streaming engine to avoid excessive memory usage.
-- Expose it as an advanced mode, not as a replacement for the main workflow.
-
-Acceptance criteria:
-- Synthetic tests verify the tensor arithmetic and the output is fully audited in metadata.
-
-### 5. Expanded LoRA Support
-
-- Extend LoRA baking beyond UNet when compatible text-encoder keys exist.
-- Add better shape validation and a report by submodule showing what was applied or skipped.
-
-Acceptance criteria:
-- The user knows exactly which parts of a LoRA were applied and which were not.
-
-### 6. Explicit Non-UNet Mixing
-
-- Turn `only_unet` into a visible, supported option across all modes.
-- Allow explicit inclusion or exclusion of VAE and text encoder where it makes sense.
-
-Acceptance criteria:
-- The configuration clearly shows which components are being merged and that choice is preserved in metadata.
 
 ## V2.4 Platform And Internal Evolution
 
@@ -133,7 +80,5 @@ Acceptance criteria:
 
 ## Recommended Priorities
 
-1. V2.2 Expert Workflow And High Performance
-2. V2.3 Merge Quality And Actionable Analysis
-3. V2.4 Platform And Internal Evolution
-4. V2.5 Full Coverage Of The Current Product
+1. V2.4 Platform And Internal Evolution
+2. V2.5 Full Coverage Of The Current Product

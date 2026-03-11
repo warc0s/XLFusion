@@ -8,14 +8,18 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+import torch
 from safetensors.torch import safe_open
 
-from .blocks import get_attn2_block_type, get_block_assignment, group_for_key, is_cross_attn_key
+from .blocks import classify_component_key, get_block_assignment
 from .memory import check_memory_availability, estimate_memory_requirement, get_available_memory_gb
+from .merge import COMPONENT_POLICY_DEFAULTS, NON_UNET_COMPONENTS
 
 BLOCK_GROUPS = ["down_0_1", "down_2_3", "mid", "up_0_1", "up_2_3"]
 LEGACY_GROUPS = ["down", "mid", "up", "other"]
 ATTN_BLOCKS = ["down", "mid", "up"]
+LEGACY_NON_UNET_ACTIONS = {"exclude", "merge", "backbone"}
+BACKBONE_ONLY_ACTIONS = {"exclude", "backbone"}
 
 
 @dataclass
@@ -37,10 +41,13 @@ class PreflightPlan:
     affected_blocks: List[str]
     effective_locks: Dict[str, str]
     loras: List[Dict[str, Any]]
+    only_unet: bool
+    component_policy: Dict[str, str]
     estimated_memory_gb: float
     available_memory_gb: Optional[float]
     memory_check_ok: bool
     compatibility_warnings: List[str] = field(default_factory=list)
+    risk_alerts: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
 
@@ -82,12 +89,7 @@ def _resolve_backbone(backbone: Any, model_names: Sequence[str]) -> int:
     return _safe_int(backbone)
 
 
-def _validate_index(
-    result: ValidationResult,
-    value: Any,
-    field: str,
-    model_count: int,
-) -> Optional[int]:
+def _validate_index(result: ValidationResult, value: Any, field: str, model_count: int) -> Optional[int]:
     try:
         idx = _safe_int(value)
     except (TypeError, ValueError) as exc:
@@ -118,11 +120,7 @@ def _validate_path_list(result: ValidationResult, model_paths: Sequence[Path]) -
     return normalized_paths
 
 
-def _validate_loras(
-    result: ValidationResult,
-    loras: Optional[Sequence[Any]],
-    loras_dir: Optional[Path],
-) -> List[Dict[str, Any]]:
+def _validate_loras(result: ValidationResult, loras: Optional[Sequence[Any]], loras_dir: Optional[Path]) -> List[Dict[str, Any]]:
     normalized: List[Dict[str, Any]] = []
     if not loras:
         return normalized
@@ -163,7 +161,6 @@ def _validate_loras(
             continue
 
         normalized.append({"file": path.name, "scale": scale, "path": path})
-
     return normalized
 
 
@@ -201,6 +198,49 @@ def _validate_legacy_maps(
     return normalized
 
 
+def _normalize_component_policy(
+    result: ValidationResult,
+    *,
+    mode: str,
+    only_unet: Optional[Any],
+    component_policy: Optional[Dict[str, Any]],
+) -> tuple[bool, Dict[str, str]]:
+    default_only_unet = mode == "legacy"
+    if only_unet is None:
+        normalized_only_unet = default_only_unet
+    elif isinstance(only_unet, bool):
+        normalized_only_unet = only_unet
+    else:
+        _error(result, "only_unet", "must be a boolean when provided")
+        normalized_only_unet = default_only_unet
+
+    if normalized_only_unet:
+        return True, {component: "exclude" for component in NON_UNET_COMPONENTS}
+
+    allowed_actions = LEGACY_NON_UNET_ACTIONS if mode == "legacy" else BACKBONE_ONLY_ACTIONS
+    normalized_policy = dict(COMPONENT_POLICY_DEFAULTS.get(mode, COMPONENT_POLICY_DEFAULTS["legacy"]))
+
+    if component_policy is not None:
+        if not isinstance(component_policy, dict):
+            _error(result, "component_policy", "must be a mapping of component to action")
+        else:
+            for component, action in component_policy.items():
+                if component not in NON_UNET_COMPONENTS:
+                    _error(result, f"component_policy.{component}", "unsupported component")
+                    continue
+                if not isinstance(action, str) or action not in allowed_actions:
+                    _error(
+                        result,
+                        f"component_policy.{component}",
+                        f"must be one of {sorted(allowed_actions)} for mode '{mode}'",
+                    )
+                    continue
+                normalized_policy[component] = action
+
+    normalized_only_unet = all(normalized_policy[component] == "exclude" for component in NON_UNET_COMPONENTS)
+    return normalized_only_unet, normalized_policy
+
+
 def _collect_structure_compatibility(model_paths: Sequence[Path]) -> List[str]:
     if len(model_paths) < 2:
         return []
@@ -210,10 +250,7 @@ def _collect_structure_compatibility(model_paths: Sequence[Path]) -> List[str]:
     with safe_open(str(reference_path), framework="pt", device="cpu") as ref_handle:
         reference_keys = list(ref_handle.keys())
         reference_key_set = set(reference_keys)
-        reference_shapes = {
-            key: tuple(ref_handle.get_slice(key).get_shape())
-            for key in reference_keys
-        }
+        reference_shapes = {key: tuple(ref_handle.get_slice(key).get_shape()) for key in reference_keys}
 
     for model_path in model_paths[1:]:
         with safe_open(str(model_path), framework="pt", device="cpu") as handle:
@@ -223,8 +260,7 @@ def _collect_structure_compatibility(model_paths: Sequence[Path]) -> List[str]:
             extra = len(key_set - reference_key_set)
             if missing or extra:
                 warnings.append(
-                    f"{model_path.name}: structure differs from {reference_path.name} "
-                    f"(missing={missing}, extra={extra})"
+                    f"{model_path.name}: structure differs from {reference_path.name} (missing={missing}, extra={extra})"
                 )
 
             mismatches = 0
@@ -234,11 +270,86 @@ def _collect_structure_compatibility(model_paths: Sequence[Path]) -> List[str]:
                     if mismatches >= 3:
                         break
             if mismatches:
-                warnings.append(
-                    f"{model_path.name}: found shape mismatches against {reference_path.name}"
-                )
-
+                warnings.append(f"{model_path.name}: found shape mismatches against {reference_path.name}")
     return warnings
+
+
+def _sample_pairwise_similarity(model_a: Path, model_b: Path, limit: int = 12) -> float:
+    with safe_open(str(model_a), framework="pt", device="cpu") as handle_a, safe_open(str(model_b), framework="pt", device="cpu") as handle_b:
+        common_keys = sorted(set(handle_a.keys()) & set(handle_b.keys()))
+        similarities: List[float] = []
+        for key in common_keys:
+            if len(similarities) >= limit:
+                break
+            shape_a = tuple(handle_a.get_slice(key).get_shape())
+            shape_b = tuple(handle_b.get_slice(key).get_shape())
+            if shape_a != shape_b:
+                continue
+            tensor_a = handle_a.get_tensor(key).flatten().to(torch.float32)
+            tensor_b = handle_b.get_tensor(key).flatten().to(torch.float32)
+            if tensor_a.numel() == 0 or tensor_b.numel() == 0:
+                continue
+            similarity = torch.nn.functional.cosine_similarity(tensor_a.unsqueeze(0), tensor_b.unsqueeze(0)).item()
+            similarities.append(float(similarity))
+        if not similarities:
+            return 0.0
+        return sum(similarities) / len(similarities)
+
+
+def _collect_risk_alerts(
+    model_paths: Sequence[Path],
+    *,
+    mode: str,
+    normalized: Dict[str, Any],
+    compatibility_warnings: Sequence[str],
+) -> List[str]:
+    alerts: List[str] = []
+
+    if compatibility_warnings:
+        alerts.append("Model structure differs across inputs; the merge may fall back to the backbone or skip tensors.")
+
+    if len(model_paths) >= 2:
+        try:
+            similarity = _sample_pairwise_similarity(model_paths[0], model_paths[1])
+        except Exception:
+            similarity = 0.0
+        if similarity < 0.35:
+            alerts.append(
+                f"Sampled similarity is very low ({similarity:.3f}); this combination is high-risk for unstable or low-value results."
+            )
+        elif similarity > 0.995:
+            alerts.append(
+                f"Sampled similarity is extremely high ({similarity:.3f}); the merge may add very little value over the backbone."
+            )
+
+    if mode == "legacy":
+        weights = normalized.get("weights") or []
+        if weights and max(weights) >= 0.9:
+            alerts.append("One model dominates the legacy weights; the output may be too close to a single source model.")
+    elif mode == "perres":
+        assignments = normalized.get("assignments") or {}
+        if len(set(assignments.values())) == 1 and len(assignments) == len(BLOCK_GROUPS):
+            alerts.append("All PerRes blocks are assigned to the same model; block mode adds no diversity in this configuration.")
+    elif mode == "hybrid":
+        hybrid_config = normalized.get("hybrid_config") or {}
+        concentrated_blocks = 0
+        for weights in hybrid_config.values():
+            if weights and max(weights.values()) >= 0.95:
+                concentrated_blocks += 1
+        if concentrated_blocks >= 4:
+            alerts.append("Most hybrid blocks are effectively single-source; consider whether hybrid mode is adding enough value.")
+
+    locks = normalized.get("attn2_locks") or {}
+    if locks and mode == "legacy":
+        alerts.append("Cross-attention locks are ignored in legacy mode.")
+
+    component_policy = normalized.get("component_policy") or {}
+    if normalized.get("only_unet"):
+        alerts.append("Only UNet tensors will be written; VAE, text encoder and other components are excluded explicitly.")
+    elif mode != "legacy" and any(action == "exclude" for action in component_policy.values()):
+        alerts.append("Some non-UNet components will be excluded instead of copied from the backbone.")
+
+    return alerts
 
 
 def validate_merge_request(
@@ -254,6 +365,8 @@ def validate_merge_request(
     crossattn_boosts: Optional[Sequence[Dict[str, Any]]] = None,
     loras: Optional[Sequence[Any]] = None,
     loras_dir: Optional[Path] = None,
+    only_unet: Optional[Any] = None,
+    component_policy: Optional[Dict[str, Any]] = None,
 ) -> ValidationResult:
     result = ValidationResult(valid=True, normalized={"mode": mode})
     normalized_paths = _validate_path_list(result, model_paths)
@@ -278,6 +391,15 @@ def validate_merge_request(
                 _error(result, "backbone", f"index {backbone_idx} out of range for {model_count} selected models")
                 backbone_idx = None
     result.normalized["backbone_idx"] = backbone_idx
+
+    normalized_only_unet, normalized_component_policy = _normalize_component_policy(
+        result,
+        mode=mode,
+        only_unet=only_unet,
+        component_policy=component_policy,
+    )
+    result.normalized["only_unet"] = normalized_only_unet
+    result.normalized["component_policy"] = normalized_component_policy
 
     normalized_loras = _validate_loras(result, loras, loras_dir)
     result.normalized["loras"] = normalized_loras
@@ -308,12 +430,8 @@ def validate_merge_request(
                 _warning(result, "weights", f"weights sum to {total_weight:.3f}; the merge will normalize them")
 
         result.normalized["weights"] = normalized_weights
-        result.normalized["block_multipliers"] = _validate_legacy_maps(
-            result, block_multipliers, "block_multipliers", model_count
-        )
-        result.normalized["crossattn_boosts"] = _validate_legacy_maps(
-            result, crossattn_boosts, "crossattn_boosts", model_count
-        )
+        result.normalized["block_multipliers"] = _validate_legacy_maps(result, block_multipliers, "block_multipliers", model_count)
+        result.normalized["crossattn_boosts"] = _validate_legacy_maps(result, crossattn_boosts, "crossattn_boosts", model_count)
 
     elif mode == "perres":
         normalized_assignments: Dict[str, int] = {}
@@ -338,7 +456,7 @@ def validate_merge_request(
             _error(result, "hybrid_config", "hybrid mode requires a hybrid_config mapping")
         else:
             for block in BLOCK_GROUPS:
-                weights_by_model = (hybrid_config or {}).get(block)
+                weights_by_model = hybrid_config.get(block) if hybrid_config else None
                 if not isinstance(weights_by_model, dict):
                     _error(result, f"hybrid_config.{block}", "missing required block mapping")
                     continue
@@ -390,9 +508,7 @@ def validate_merge_request(
         return result
 
     if mode == "legacy":
-        selected_indices = sorted(
-            {idx for idx, weight in enumerate(result.normalized["weights"]) if weight > 0} | {backbone_idx}
-        )
+        selected_indices = sorted({idx for idx, weight in enumerate(result.normalized["weights"]) if weight > 0} | {backbone_idx})
         loaded_indices = list(range(model_count))
         affected_blocks = ["down", "mid", "up"]
     elif mode == "perres":
@@ -418,10 +534,17 @@ def validate_merge_request(
     for warning_text in compatibility_warnings:
         _warning(result, "compatibility", warning_text)
 
-    estimated_memory_gb = estimate_memory_requirement(
+    risk_alerts = _collect_risk_alerts(
         normalized_paths,
-        set(loaded_indices if mode != "legacy" else range(model_count)),
+        mode=mode,
+        normalized=result.normalized,
+        compatibility_warnings=compatibility_warnings,
     )
+    for alert in risk_alerts:
+        _warning(result, "risk", alert)
+
+    estimated_indices = set(loaded_indices if mode != "legacy" else range(model_count))
+    estimated_memory_gb = estimate_memory_requirement(normalized_paths, estimated_indices)
     available_memory_gb = get_available_memory_gb()
     memory_ok = check_memory_availability(estimated_memory_gb)
     if not memory_ok:
@@ -431,10 +554,7 @@ def validate_merge_request(
             f"estimated memory requirement is {estimated_memory_gb:.2f} GB and may exceed available memory",
         )
 
-    effective_locks = {
-        block_type: model_names[idx]
-        for block_type, idx in normalized_locks.items()
-    }
+    effective_locks = {block_type: model_names[idx] for block_type, idx in normalized_locks.items()}
 
     result.preflight = PreflightPlan(
         mode=mode,
@@ -444,23 +564,19 @@ def validate_merge_request(
         selected_model_indices=selected_indices,
         selected_models=[model_names[idx] for idx in selected_indices],
         loaded_model_indices=loaded_indices if mode != "legacy" else list(range(model_count)),
-        loaded_models=[
-            model_names[idx]
-            for idx in (loaded_indices if mode != "legacy" else list(range(model_count)))
-        ],
+        loaded_models=[model_names[idx] for idx in (loaded_indices if mode != "legacy" else list(range(model_count)))],
         affected_blocks=affected_blocks,
         effective_locks=effective_locks,
-        loras=[
-            {"file": item["file"], "scale": item["scale"]}
-            for item in normalized_loras
-        ],
+        loras=[{"file": item["file"], "scale": item["scale"]} for item in normalized_loras],
+        only_unet=normalized_only_unet,
+        component_policy=normalized_component_policy,
         estimated_memory_gb=estimated_memory_gb,
         available_memory_gb=available_memory_gb,
         memory_check_ok=memory_ok,
         compatibility_warnings=compatibility_warnings,
+        risk_alerts=risk_alerts,
         warnings=[issue.message for issue in result.warnings],
     )
-
     return result
 
 
@@ -469,11 +585,8 @@ def preflight_to_dict(plan: PreflightPlan) -> Dict[str, Any]:
 
 
 def format_preflight_plan(plan: PreflightPlan) -> str:
-    available = (
-        f"{plan.available_memory_gb:.2f} GB"
-        if plan.available_memory_gb is not None
-        else "unknown"
-    )
+    available = f"{plan.available_memory_gb:.2f} GB" if plan.available_memory_gb is not None else "unknown"
+    component_policy = json.dumps(plan.component_policy, ensure_ascii=False) if plan.component_policy else "none"
     lines = [
         "Fusion preflight",
         "=" * 60,
@@ -482,6 +595,8 @@ def format_preflight_plan(plan: PreflightPlan) -> str:
         f"Selected models: {', '.join(plan.selected_models) or 'none'}",
         f"Loaded models: {', '.join(plan.loaded_models) or 'none'}",
         f"Affected blocks: {', '.join(plan.affected_blocks) or 'none'}",
+        f"Only UNet: {'yes' if plan.only_unet else 'no'}",
+        f"Component policy: {component_policy}",
         f"Effective locks: {json.dumps(plan.effective_locks, ensure_ascii=False) if plan.effective_locks else 'none'}",
         f"LoRAs: {json.dumps(plan.loras, ensure_ascii=False) if plan.loras else 'none'}",
         f"Estimated memory: {plan.estimated_memory_gb:.2f} GB",
@@ -495,10 +610,16 @@ def format_preflight_plan(plan: PreflightPlan) -> str:
         for warning_text in plan.compatibility_warnings:
             lines.append(f"  - {warning_text}")
 
+    if plan.risk_alerts:
+        lines.append("")
+        lines.append("Risk alerts:")
+        for alert in plan.risk_alerts:
+            lines.append(f"  - {alert}")
+
     extra_warnings = [
         warning_text
         for warning_text in plan.warnings
-        if warning_text not in plan.compatibility_warnings
+        if warning_text not in plan.compatibility_warnings and warning_text not in plan.risk_alerts
     ]
     if extra_warnings:
         lines.append("")
@@ -512,10 +633,7 @@ def format_preflight_plan(plan: PreflightPlan) -> str:
 def export_preflight_plan(plan: PreflightPlan, destination: Path) -> Path:
     destination = Path(destination)
     if destination.suffix.lower() == ".json":
-        destination.write_text(
-            json.dumps(preflight_to_dict(plan), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        destination.write_text(json.dumps(preflight_to_dict(plan), indent=2, ensure_ascii=False), encoding="utf-8")
     else:
         destination.write_text(format_preflight_plan(plan), encoding="utf-8")
     return destination

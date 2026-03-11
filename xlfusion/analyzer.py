@@ -1,664 +1,533 @@
-#!/usr/bin/env python3
-"""
-XLFusion V1.3 - Advanced Model Analyzer
-========================================
-
-Provides analysis, comparison, prediction and recommendation capabilities for SDXL model fusion.
-
-Features:
-- Model difference analysis with block-level statistics
-- Compatibility checking between multiple models
-- Fusion result prediction
-- Intelligent configuration recommendations
-"""
-
+"""Actionable analysis helpers for XLFusion."""
 from __future__ import annotations
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import List, Dict, Tuple, Optional, Any
-import torch
-import numpy as np
-from collections import defaultdict
 
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+import json
+
+import numpy as np
+import torch
+
+from .blocks import classify_component_key, classify_submodule_key, get_block_assignment
 from .memory import load_state
-from .blocks import get_block_assignment, is_cross_attn_key, UNET_PREFIX
+
+REGION_ALIASES = {
+    "down_0_1": "structure",
+    "down_2_3": "structure",
+    "mid": "semantics",
+    "up_0_1": "style",
+    "up_2_3": "detail",
+}
 
 
 @dataclass
 class DiffAnalysisResult:
-    """Results from model difference analysis"""
     model_a: str
     model_b: str
-    block_differences: Dict[str, Dict[str, float]]
-    significant_changes: List[str]
     overall_similarity: float
+    region_summaries: Dict[str, Dict[str, float]]
+    submodule_summaries: Dict[str, Dict[str, float]]
+    histograms: Dict[str, Dict[str, List[float]]]
+    dominance_summary: Dict[str, str]
+    significant_changes: List[str]
+    risk_alerts: List[str] = field(default_factory=list)
 
 
 @dataclass
 class CompatibilityReport:
-    """Compatibility analysis report for multiple models"""
     models: List[str]
     compatibility_score: float
     architecture_match: bool
     warnings: List[str]
     pairwise_similarity: Dict[Tuple[int, int], float] = field(default_factory=dict)
+    risk_alerts: List[str] = field(default_factory=list)
 
 
 @dataclass
 class PredictionReport:
-    """Prediction of fusion characteristics"""
-    fusion_config: Dict
+    fusion_config: Dict[str, Any]
     predicted_dominance: Dict[str, str]
     diversity_score: float
     warnings: List[str]
+    recommended_backbone: Optional[str] = None
 
 
 @dataclass
 class Recommendation:
-    """Single recommendation for fusion configuration"""
-    type: str
+    profile: str
     priority: str
     message: str
-    suggested_config: Optional[Dict] = None
+    rationale: str
+    suggested_config: Optional[Dict[str, Any]] = None
+
+
+def _region_for_key(key: str) -> str:
+    component = classify_component_key(key)
+    if component != "unet":
+        return component
+    return REGION_ALIASES.get(get_block_assignment(key) or "other", "other")
+
+
+def _safe_histogram(values: Sequence[float], *, bins: int = 5, start: float = 0.0, end: float = 1.0) -> Dict[str, List[float]]:
+    if not values:
+        return {"edges": [], "counts": []}
+    counts, edges = np.histogram(values, bins=bins, range=(start, end))
+    return {
+        "edges": [float(edge) for edge in edges.tolist()],
+        "counts": [int(count) for count in counts.tolist()],
+    }
+
+
+def _summarize_metric(values: Sequence[float]) -> Dict[str, float]:
+    if not values:
+        return {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0, "count": 0.0}
+    arr = np.asarray(values, dtype=np.float64)
+    return {
+        "mean": float(arr.mean()),
+        "std": float(arr.std()),
+        "min": float(arr.min()),
+        "max": float(arr.max()),
+        "count": float(arr.size),
+    }
+
+
+def _fingerprint_model(state: Dict[str, torch.Tensor]) -> Dict[str, Dict[str, float]]:
+    regions: Dict[str, List[float]] = {}
+    submodules: Dict[str, List[float]] = {}
+
+    for key, tensor in state.items():
+        region = _region_for_key(key)
+        submodule = classify_submodule_key(key)
+        tensor_f = tensor.to(torch.float32)
+        norm_value = float(torch.norm(tensor_f).item() / max(tensor_f.numel(), 1))
+        regions.setdefault(region, []).append(norm_value)
+        submodules.setdefault(f"{region}:{submodule}", []).append(norm_value)
+
+    return {
+        "regions": {name: _summarize_metric(values) for name, values in regions.items()},
+        "submodules": {name: _summarize_metric(values) for name, values in submodules.items()},
+    }
 
 
 class ModelDiffAnalyzer:
-    """Analyzes differences between two SDXL models."""
-    
-    def __init__(self, significant_threshold: float = 0.1):
+    """Analyze detailed differences between two checkpoints."""
+
+    def __init__(self, significant_threshold: float = 0.1) -> None:
         self.significant_threshold = significant_threshold
-    
-    def analyze_model_differences(
-        self, 
-        model_a: Path, 
-        model_b: Path
-    ) -> DiffAnalysisResult:
-        """
-        Analyze tensor-by-tensor differences between two models.
-        
-        Args:
-            model_a: Path to first model
-            model_b: Path to second model
-            
-        Returns:
-            DiffAnalysisResult containing detailed difference analysis
-        """
-        # Validate paths exist
+
+    def analyze_model_differences(self, model_a: Path, model_b: Path) -> DiffAnalysisResult:
         if not model_a.exists():
             raise FileNotFoundError(f"Model A not found: {model_a}")
         if not model_b.exists():
             raise FileNotFoundError(f"Model B not found: {model_b}")
-        
-        print(f"Loading model A: {model_a.name}")
+
         state_a = load_state(model_a)
-        
-        print(f"Loading model B: {model_b.name}")
         state_b = load_state(model_b)
-        
-        print("Analyzing differences...")
-        
-        block_diffs = defaultdict(lambda: {
-            'l1_distances': [],
-            'l2_distances': [],
-            'cosine_similarities': [],
-            'relative_changes': []
-        })
-        
-        significant_changes = []
-        all_similarities = []
-        
-        common_keys = set(state_a.keys()) & set(state_b.keys())
-        
-        for i, key in enumerate(common_keys):
-            if i % 100 == 0:
-                print(f"  Processed {i}/{len(common_keys)} tensors...")
-            
+
+        common_keys = sorted(set(state_a.keys()) & set(state_b.keys()))
+        cosine_by_region: Dict[str, List[float]] = {}
+        rel_change_by_region: Dict[str, List[float]] = {}
+        cosine_by_submodule: Dict[str, List[float]] = {}
+        rel_change_by_submodule: Dict[str, List[float]] = {}
+        all_similarities: List[float] = []
+        significant_changes: List[str] = []
+
+        for key in common_keys:
             tensor_a = state_a[key]
             tensor_b = state_b[key]
-            
             if tensor_a.shape != tensor_b.shape:
                 continue
-            
-            diff = tensor_a - tensor_b
-            
-            l1_dist = torch.abs(diff).mean().item()
-            l2_dist = torch.norm(diff).item() / diff.numel()
-            
-            flat_a = tensor_a.flatten().float()
-            flat_b = tensor_b.flatten().float()
-            cos_sim = torch.nn.functional.cosine_similarity(
-                flat_a.unsqueeze(0), 
-                flat_b.unsqueeze(0)
-            ).item()
-            
-            relative_change = l2_dist / (torch.norm(tensor_a).item() / tensor_a.numel() + 1e-8)
-            
-            block = get_block_assignment(key)
-            if block:
-                block_diffs[block]['l1_distances'].append(l1_dist)
-                block_diffs[block]['l2_distances'].append(l2_dist)
-                block_diffs[block]['cosine_similarities'].append(cos_sim)
-                block_diffs[block]['relative_changes'].append(relative_change)
-            
-            all_similarities.append(cos_sim)
-            
+            tensor_a_f = tensor_a.flatten().to(torch.float32)
+            tensor_b_f = tensor_b.flatten().to(torch.float32)
+            if tensor_a_f.numel() == 0:
+                continue
+
+            cosine = torch.nn.functional.cosine_similarity(tensor_a_f.unsqueeze(0), tensor_b_f.unsqueeze(0)).item()
+            relative_change = float(torch.norm(tensor_a_f - tensor_b_f).item() / max(torch.norm(tensor_a_f).item(), 1e-8))
+
+            region = _region_for_key(key)
+            submodule = f"{region}:{classify_submodule_key(key)}"
+            cosine_by_region.setdefault(region, []).append(float(cosine))
+            rel_change_by_region.setdefault(region, []).append(relative_change)
+            cosine_by_submodule.setdefault(submodule, []).append(float(cosine))
+            rel_change_by_submodule.setdefault(submodule, []).append(relative_change)
+            all_similarities.append(float(cosine))
+
             if relative_change > self.significant_threshold:
                 significant_changes.append(key)
-        
-        block_statistics = {}
-        for block, metrics in block_diffs.items():
-            if metrics['l1_distances']:
-                block_statistics[block] = {
-                    'l1_mean': float(np.mean(metrics['l1_distances'])),
-                    'l1_std': float(np.std(metrics['l1_distances'])),
-                    'l2_mean': float(np.mean(metrics['l2_distances'])),
-                    'l2_std': float(np.std(metrics['l2_distances'])),
-                    'cosine_mean': float(np.mean(metrics['cosine_similarities'])),
-                    'cosine_std': float(np.std(metrics['cosine_similarities'])),
-                    'relative_change_mean': float(np.mean(metrics['relative_changes'])),
-                    'relative_change_max': float(np.max(metrics['relative_changes'])),
-                    'num_tensors': len(metrics['l1_distances'])
-                }
-        
+
+        region_summaries: Dict[str, Dict[str, float]] = {}
+        for region, values in cosine_by_region.items():
+            region_summaries[region] = {
+                "cosine_mean": _summarize_metric(values)["mean"],
+                "relative_change_mean": _summarize_metric(rel_change_by_region.get(region, []))["mean"],
+                "tensor_count": _summarize_metric(values)["count"],
+            }
+
+        submodule_summaries: Dict[str, Dict[str, float]] = {}
+        for submodule, values in cosine_by_submodule.items():
+            submodule_summaries[submodule] = {
+                "cosine_mean": _summarize_metric(values)["mean"],
+                "relative_change_mean": _summarize_metric(rel_change_by_submodule.get(submodule, []))["mean"],
+                "tensor_count": _summarize_metric(values)["count"],
+            }
+
+        histograms = {
+            region: {
+                "cosine": _safe_histogram(cosine_by_region.get(region, []), bins=5, start=-1.0, end=1.0),
+                "relative_change": _safe_histogram(rel_change_by_region.get(region, []), bins=5, start=0.0, end=1.0),
+            }
+            for region in sorted(region_summaries)
+        }
+
+        fingerprint_a = _fingerprint_model(state_a)
+        fingerprint_b = _fingerprint_model(state_b)
+        dominance_summary = self._build_dominance_summary(fingerprint_a, fingerprint_b)
         overall_similarity = float(np.mean(all_similarities)) if all_similarities else 0.0
-        
-        print(f"Analysis complete. Found {len(significant_changes)} significant changes.")
-        
+        risk_alerts = []
+        if overall_similarity < 0.35:
+            risk_alerts.append("The models are very far apart; aggressive merges may become unstable.")
+        if overall_similarity > 0.995:
+            risk_alerts.append("The models are almost identical; the merge may add little value.")
+
         return DiffAnalysisResult(
             model_a=model_a.name,
             model_b=model_b.name,
-            block_differences=block_statistics,
+            overall_similarity=overall_similarity,
+            region_summaries=region_summaries,
+            submodule_summaries=submodule_summaries,
+            histograms=histograms,
+            dominance_summary=dominance_summary,
             significant_changes=significant_changes,
-            overall_similarity=overall_similarity
+            risk_alerts=risk_alerts,
         )
+
+    def _build_dominance_summary(
+        self,
+        fingerprint_a: Dict[str, Dict[str, float]],
+        fingerprint_b: Dict[str, Dict[str, float]],
+    ) -> Dict[str, str]:
+        summary: Dict[str, str] = {}
+        feature_map = {
+            "composition": "structure",
+            "semantics": "semantics",
+            "style": "style",
+            "detail": "detail",
+        }
+        for label, region in feature_map.items():
+            mean_a = fingerprint_a["regions"].get(region, {}).get("mean", 0.0)
+            mean_b = fingerprint_b["regions"].get(region, {}).get("mean", 0.0)
+            if abs(mean_a - mean_b) < 1e-6:
+                summary[label] = "balanced"
+            else:
+                summary[label] = "model_a" if mean_a > mean_b else "model_b"
+        return summary
 
 
 class CompatibilityAnalyzer:
-    """Analyzes compatibility between multiple models."""
-    
-    def calculate_compatibility(
-        self, 
-        models: List[Path]
-    ) -> CompatibilityReport:
-        """
-        Calculate compatibility metrics for a set of models.
-        
-        Args:
-            models: List of model paths
-            
-        Returns:
-            CompatibilityReport with compatibility analysis
-        """
-        print(f"Analyzing compatibility of {len(models)} models...")
-        
-        warnings = []
-        model_structures = []
-        
-        # Load model structures
-        for model_path in models:
-            print(f"  Loading structure of {model_path.name}")
-            state = load_state(model_path)
-            structure = {k: v.shape for k, v in state.items()}
-            model_structures.append((model_path.name, structure))
-            del state
-        
-        # Check architecture match
+    """Assess structural and sampled numerical compatibility."""
+
+    def calculate_compatibility(self, models: List[Path]) -> CompatibilityReport:
+        warnings: List[str] = []
+        structures = []
+        for path in models:
+            state = load_state(path)
+            structures.append((path.name, {key: tuple(tensor.shape) for key, tensor in state.items()}))
+
+        reference_name, reference = structures[0]
         architecture_match = True
-        reference_keys = set(model_structures[0][1].keys())
-        reference_shapes = model_structures[0][1]
-        
-        for name, structure in model_structures[1:]:
-            if set(structure.keys()) != reference_keys:
+        for name, structure in structures[1:]:
+            if set(structure.keys()) != set(reference.keys()):
                 architecture_match = False
-                warnings.append(f"{name} has different architecture (key mismatch)")
+                warnings.append(f"{name} differs structurally from {reference_name}")
                 continue
-            
-            for key in reference_keys:
-                if structure[key] != reference_shapes[key]:
+            for key, shape in structure.items():
+                if reference[key] != shape:
                     architecture_match = False
-                    warnings.append(f"{name} has different shape for {key}")
+                    warnings.append(f"{name} has shape mismatches against {reference_name}")
                     break
-        
-        # Calculate pairwise similarity
-        pairwise_similarity = {}
-        similarities = []
-        
+
+        pairwise_similarity: Dict[Tuple[int, int], float] = {}
+        similarities: List[float] = []
         for i in range(len(models)):
             for j in range(i + 1, len(models)):
-                print(f"  Calculating similarity: {models[i].name} vs {models[j].name}")
-                
-                state_i = load_state(models[i])
-                state_j = load_state(models[j])
-                
-                common_keys = set(state_i.keys()) & set(state_j.keys())
-                cos_sims = []
-                
-                for key in list(common_keys)[:100]:  # Sample for performance
-                    if state_i[key].shape != state_j[key].shape:
-                        continue
-                    
-                    flat_i = state_i[key].flatten().float()
-                    flat_j = state_j[key].flatten().float()
-                    
-                    cos_sim = torch.nn.functional.cosine_similarity(
-                        flat_i.unsqueeze(0),
-                        flat_j.unsqueeze(0)
-                    ).item()
-                    cos_sims.append(cos_sim)
-                
-                avg_similarity = float(np.mean(cos_sims)) if cos_sims else 0.0
-                pairwise_similarity[(i, j)] = avg_similarity
-                similarities.append(avg_similarity)
-                
-                del state_i, state_j
-        
-        # Detect outliers
-        if similarities:
-            mean_similarity = np.mean(similarities)
-            std_similarity = np.std(similarities)
-            
-            for (i, j), sim in pairwise_similarity.items():
-                if sim < mean_similarity - 2 * std_similarity:
-                    warnings.append(
-                        f"{models[i].name} and {models[j].name} are outliers "
-                        f"(similarity: {sim:.3f})"
-                    )
-        
-        # Calculate compatibility score
+                diff = ModelDiffAnalyzer().analyze_model_differences(models[i], models[j])
+                pairwise_similarity[(i, j)] = diff.overall_similarity
+                similarities.append(diff.overall_similarity)
+
         compatibility_score = 100.0
         if not architecture_match:
-            compatibility_score -= 50.0
-        if warnings:
-            compatibility_score -= min(len(warnings) * 5.0, 30.0)
-        if similarities and np.mean(similarities) < 0.7:
-            compatibility_score -= 20.0
-        
+            compatibility_score -= 45.0
+        if similarities:
+            average_similarity = float(np.mean(similarities))
+            if average_similarity < 0.4:
+                compatibility_score -= 25.0
+            elif average_similarity < 0.7:
+                compatibility_score -= 10.0
+        compatibility_score -= min(len(warnings) * 4.0, 20.0)
         compatibility_score = max(0.0, compatibility_score)
-        
-        print(f"Compatibility analysis complete. Score: {compatibility_score:.1f}/100")
-        
+
+        risk_alerts: List[str] = []
+        if similarities:
+            avg = float(np.mean(similarities))
+            if avg < 0.35:
+                risk_alerts.append("Sampled pairwise similarity is very low across the selected models.")
+            if avg > 0.995:
+                risk_alerts.append("Selected models are almost identical and may not justify a merge.")
+        if not architecture_match:
+            risk_alerts.append("Architecture differences detected; expect fallback behaviour or skipped tensors.")
+
         return CompatibilityReport(
-            models=[m.name for m in models],
+            models=[path.name for path in models],
             compatibility_score=compatibility_score,
             architecture_match=architecture_match,
             warnings=warnings,
-            pairwise_similarity=pairwise_similarity
+            pairwise_similarity=pairwise_similarity,
+            risk_alerts=risk_alerts,
         )
 
 
 class FusionPredictor:
-    """Predicts characteristics of fusion results."""
-    
-    def predict_fusion_characteristics(
-        self,
-        models: List[Path],
-        config: Dict
-    ) -> PredictionReport:
-        """
-        Predict characteristics of the fusion result.
-        
-        Args:
-            models: List of model paths
-            config: Fusion configuration
-            
-        Returns:
-            PredictionReport with predictions and warnings
-        """
-        print("Predicting fusion characteristics...")
-        
-        warnings = []
-        predicted_dominance = {}
-        
-        num_models = len(models)
-        
-        if num_models == 0:
-            warnings.append("No models provided for prediction")
-            return PredictionReport(
-                fusion_config=config,
-                predicted_dominance={},
-                diversity_score=0.0,
-                warnings=warnings
-            )
-        mode = config.get('mode', 'legacy')
-        
-        # Analyze based on mode
-        if mode == 'legacy':
-            weights = config.get('weights', [1.0] * num_models)
-            
-            if len(weights) != num_models:
-                warnings.append(
-                    f"Weight count mismatch: {len(weights)} weights for {num_models} models"
-                )
-                weights = [1.0] * num_models
-            
-            total_weight = sum(weights)
-            normalized_weights = [w / total_weight for w in weights]
-            
-            blocks = ['down_0_1', 'down_2_3', 'mid', 'up_0_1', 'up_2_3']
-            
-            for block in blocks:
-                dominant_idx = np.argmax(normalized_weights)
-                dominant_weight = normalized_weights[dominant_idx]
-                
-                if dominant_weight > 0.7:
-                    predicted_dominance[block] = f"{models[dominant_idx].name} ({dominant_weight:.1%})"
-                elif dominant_weight > 0.5:
-                    predicted_dominance[block] = f"{models[dominant_idx].name} (moderate {dominant_weight:.1%})"
-                else:
-                    predicted_dominance[block] = "Balanced mix"
-            
-            diversity_score = 1.0 - np.max(normalized_weights)
-            
-        elif mode == 'perres':
-            assignments = config.get('assignments', {})
-            blocks = ['down_0_1', 'down_2_3', 'mid', 'up_0_1', 'up_2_3']
-            
-            for block in blocks:
-                if block in assignments:
-                    model_idx = assignments[block]
-                    if 0 <= model_idx < len(models):
-                        predicted_dominance[block] = f"{models[model_idx].name} (100%)"
-                    else:
-                        warnings.append(f"Invalid assignment for {block}: index {model_idx}")
-                        predicted_dominance[block] = "Unknown"
-                else:
-                    predicted_dominance[block] = "Not assigned"
-            
-            diversity_score = len(set(assignments.values())) / len(models) if assignments else 0.0
-            
-        elif mode == 'hybrid':
-            hybrid_config = config.get('hybrid_config', {})
-            blocks = ['down_0_1', 'down_2_3', 'mid', 'up_0_1', 'up_2_3']
-            
-            for block in blocks:
-                if block in hybrid_config:
-                    block_weights = hybrid_config[block]
-                    if block_weights:
-                        max_idx = max(block_weights.keys(), key=lambda k: block_weights[k])
-                        max_weight = block_weights[max_idx]
-                        if max_weight > 0.7:
-                            predicted_dominance[block] = f"{models[max_idx].name} ({max_weight:.1%})"
-                        else:
-                            predicted_dominance[block] = "Mixed"
-                    else:
-                        predicted_dominance[block] = "Not configured"
-                else:
-                    predicted_dominance[block] = "Not configured"
-            
-            all_weights = []
-            for block_weights in hybrid_config.values():
-                all_weights.extend(block_weights.values())
-            diversity_score = 1.0 - max(all_weights) if all_weights else 0.0
+    """Turn a candidate config into a coarse dominance prediction."""
+
+    def predict_fusion_characteristics(self, models: List[Path], config: Dict[str, Any]) -> PredictionReport:
+        warnings: List[str] = []
+        predicted_dominance: Dict[str, str] = {}
+        mode = config.get("mode", "legacy")
+
+        if mode == "legacy":
+            weights = config.get("weights") or [1.0 / max(len(models), 1)] * len(models)
+            total = sum(weights) or 1.0
+            normalized = [float(weight) / total for weight in weights]
+            dominant_idx = int(np.argmax(normalized))
+            for block in ["down_0_1", "down_2_3", "mid", "up_0_1", "up_2_3"]:
+                weight = normalized[dominant_idx]
+                predicted_dominance[block] = f"{models[dominant_idx].name} ({weight:.1%})" if weight > 0.55 else "Balanced mix"
+            diversity_score = 1.0 - max(normalized)
+            recommended_backbone = models[dominant_idx].name
+        elif mode == "perres":
+            assignments = config.get("assignments") or {}
+            for block in ["down_0_1", "down_2_3", "mid", "up_0_1", "up_2_3"]:
+                idx = assignments.get(block, 0)
+                predicted_dominance[block] = f"{models[idx].name} (100%)" if 0 <= idx < len(models) else "Unknown"
+            diversity_score = len(set(assignments.values())) / max(len(models), 1) if assignments else 0.0
+            recommended_backbone = models[next(iter(assignments.values()), 0)].name if models else None
         else:
-            warnings.append(f"Unknown mode: {mode}")
-            diversity_score = 0.0
-        
-        # General warnings
-        if diversity_score < 0.2:
-            warnings.append(
-                f"Low diversity: fusion may be dominated by single model"
-            )
-        
-        if 'attn2_locks' in config:
-            locks = config['attn2_locks']
-            if isinstance(locks, dict):
-                for block_type, lock_idx in locks.items():
-                    if lock_idx < 0 or lock_idx >= num_models:
-                        warnings.append(f"Invalid attn2_lock index for {block_type}: {lock_idx}")
-        
-        if 'backbone' in config:
-            backbone = config['backbone']
-            if isinstance(backbone, int) and (backbone < 0 or backbone >= num_models):
-                warnings.append(f"Invalid backbone index: {backbone}")
-        
-        print(f"Prediction complete. Diversity score: {diversity_score:.3f}")
-        
+            hybrid_config = config.get("hybrid_config") or {}
+            for block in ["down_0_1", "down_2_3", "mid", "up_0_1", "up_2_3"]:
+                block_weights = hybrid_config.get(block, {})
+                if not block_weights:
+                    predicted_dominance[block] = "Not configured"
+                    continue
+                dominant_idx = max(block_weights, key=block_weights.get)
+                dominant_weight = block_weights[dominant_idx]
+                predicted_dominance[block] = f"{models[dominant_idx].name} ({dominant_weight:.1%})" if dominant_weight > 0.55 else "Mixed"
+            all_weights = [value for block in hybrid_config.values() for value in block.values()]
+            diversity_score = 1.0 - max(all_weights) if all_weights else 0.0
+            recommended_backbone = models[int(config.get("backbone", 0))].name if models else None
+
+        if diversity_score < 0.15:
+            warnings.append("The proposed configuration is very concentrated in a single model.")
         return PredictionReport(
             fusion_config=config,
             predicted_dominance=predicted_dominance,
             diversity_score=diversity_score,
-            warnings=warnings
+            warnings=warnings,
+            recommended_backbone=recommended_backbone,
         )
 
 
 class RecommendationEngine:
-    """Generates fusion recommendations based on model analysis."""
-    
+    """Generate actionable merge starting points from model fingerprints."""
+
     GOALS = {
-        'style_transfer': {
-            'description': 'Transfer style while preserving structure',
-            'focus': 'cross_attention'
-        },
-        'detail_enhance': {
-            'description': 'Enhance details and quality',
-            'focus': 'up_blocks'
-        },
-        'balanced': {
-            'description': 'Balanced fusion of all characteristics',
-            'focus': 'all'
-        }
+        "balanced": "Blend composition, semantics and style evenly.",
+        "style_transfer": "Preserve structure while moving style aggressively.",
+        "detail_recovery": "Recover detail-heavy up blocks without losing the base model.",
+        "prompt_fidelity": "Prioritize text-conditioning and semantic stability.",
+        "detail_enhance": "Legacy alias for detail_recovery.",
     }
-    
-    def generate_recommendations(
-        self,
-        models: List[Path],
-        goal: str = 'balanced'
-    ) -> List[Recommendation]:
-        """
-        Generate fusion recommendations based on model analysis and goal.
-        
-        Args:
-            models: List of model paths
-            goal: Fusion goal ('style_transfer', 'detail_enhance', 'balanced')
-            
-        Returns:
-            List of Recommendation objects
-        """
-        print(f"Generating recommendations for goal: {goal}")
-        
-        recommendations = []
-        
+
+    def _fingerprints_for_models(self, models: Sequence[Path]) -> List[Dict[str, Dict[str, float]]]:
+        return [_fingerprint_model(load_state(model_path)) for model_path in models]
+
+    def generate_recommendations(self, models: List[Path], goal: str = "balanced") -> List[Recommendation]:
+        if goal == "detail_enhance":
+            goal = "detail_recovery"
         if goal not in self.GOALS:
-            recommendations.append(Recommendation(
-                type="warning",
-                priority="high",
-                message=f"Unknown goal '{goal}'. Using 'balanced' instead.",
-            ))
-            goal = 'balanced'
-        
-        print("Analyzing model characteristics...")
-        model_stats = []
-        
-        for model_path in models:
-            state = load_state(model_path)
-            
-            cross_attn_keys = [k for k in state.keys() if is_cross_attn_key(k)]
-            cross_attn_variance = []
-            
-            for key in cross_attn_keys[:10]:  # Sample for performance
-                variance = torch.var(state[key]).item()
-                cross_attn_variance.append(variance)
-            
-            avg_cross_attn_var = float(np.mean(cross_attn_variance)) if cross_attn_variance else 0.0
-            
-            model_stats.append({
-                'name': model_path.name,
-                'cross_attn_variance': avg_cross_attn_var,
-                'total_keys': len(state.keys())
+            raise ValueError(f"Unknown goal '{goal}'")
+
+        fingerprints = self._fingerprints_for_models(models)
+        region_means = []
+        for fp in fingerprints:
+            region_means.append({
+                "structure": fp["regions"].get("structure", {}).get("mean", 0.0),
+                "semantics": fp["regions"].get("semantics", {}).get("mean", 0.0),
+                "style": fp["regions"].get("style", {}).get("mean", 0.0),
+                "detail": fp["regions"].get("detail", {}).get("mean", 0.0),
             })
-            
-            del state
-        
-        # Generate goal-specific recommendations
-        if goal == 'style_transfer':
-            style_model_idx = int(np.argmax([s['cross_attn_variance'] for s in model_stats]))
-            
-            recommendations.append(Recommendation(
-                type="attn2_lock",
-                priority="high",
-                message=f"Lock cross-attention to {model_stats[style_model_idx]['name']} "
-                        f"for style transfer",
-                suggested_config={'attn2_locks': {'down': style_model_idx, 'mid': style_model_idx, 'up': style_model_idx}}
-            ))
-            
-            if len(models) > 1:
-                structure_idx = 1 - style_model_idx if len(models) == 2 else 0
-                recommendations.append(Recommendation(
-                    type="backbone",
-                    priority="high",
-                    message=f"Use {model_stats[structure_idx]['name']} as backbone "
-                            f"to preserve structure",
-                    suggested_config={'backbone': structure_idx}
-                ))
-        
-        elif goal == 'detail_enhance':
-            recommendations.append(Recommendation(
-                type="config",
-                priority="high",
-                message="Use PerRes or Hybrid mode with detail model on up_blocks",
+
+        structure_idx = int(np.argmax([item["structure"] for item in region_means])) if region_means else 0
+        style_idx = int(np.argmax([item["style"] for item in region_means])) if region_means else 0
+        detail_idx = int(np.argmax([item["detail"] for item in region_means])) if region_means else 0
+        semantics_idx = int(np.argmax([item["semantics"] for item in region_means])) if region_means else 0
+
+        recommendations: List[Recommendation] = []
+        balanced_weights = [round(1.0 / len(models), 4)] * len(models)
+
+        recommendations.append(
+            Recommendation(
+                profile="balanced",
+                priority="medium",
+                message="Balanced starting point with equal global weights.",
+                rationale="Use this when no single model should dominate the merge.",
                 suggested_config={
-                    'mode': 'perres',
-                    'assignments': {
-                        'down_0_1': 0,
-                        'down_2_3': 0,
-                        'mid': 0,
-                        'up_0_1': 1 if len(models) > 1 else 0,
-                        'up_2_3': 1 if len(models) > 1 else 0
-                    }
-                }
-            ))
-            
-            detail_model_idx = 0
-            recommendations.append(Recommendation(
-                type="backbone",
-                priority="medium",
-                message=f"Consider using {model_stats[detail_model_idx]['name']} "
-                        f"as backbone for base quality",
-                suggested_config={'backbone': detail_model_idx}
-            ))
-        
-        else:  # balanced
-            equal_weights = [1.0 / len(models)] * len(models)
-            recommendations.append(Recommendation(
-                type="config",
-                priority="medium",
-                message="Use equal weights for balanced fusion",
-                suggested_config={'mode': 'legacy', 'weights': equal_weights}
-            ))
-        
-        # General recommendations
-        if len(models) > 3:
-            recommendations.append(Recommendation(
-                type="warning",
-                priority="medium",
-                message=f"Fusing {len(models)} models may dilute characteristics. "
-                        f"Consider reducing to 2-3 models.",
-            ))
-        
-        print(f"Generated {len(recommendations)} recommendations")
-        
-        return recommendations
+                    "mode": "legacy",
+                    "weights": balanced_weights,
+                    "backbone": structure_idx,
+                },
+            )
+        )
+        recommendations.append(
+            Recommendation(
+                profile="style_transfer",
+                priority="high",
+                message=f"Use {models[structure_idx].name} for structure and {models[style_idx].name} for style-sensitive up blocks.",
+                rationale="Structure is stronger in down blocks, while style strength is higher in the up blocks.",
+                suggested_config={
+                    "mode": "hybrid",
+                    "backbone": structure_idx,
+                    "hybrid_config": {
+                        "down_0_1": {structure_idx: 0.8, style_idx: 0.2},
+                        "down_2_3": {structure_idx: 0.8, style_idx: 0.2},
+                        "mid": {structure_idx: 0.6, style_idx: 0.4},
+                        "up_0_1": {style_idx: 0.7, structure_idx: 0.3},
+                        "up_2_3": {style_idx: 0.8, structure_idx: 0.2},
+                    },
+                    "attn2_locks": {"down": structure_idx, "mid": semantics_idx, "up": style_idx},
+                },
+            )
+        )
+        recommendations.append(
+            Recommendation(
+                profile="detail_recovery",
+                priority="high",
+                message=f"Use {models[detail_idx].name} for the detail-heavy up blocks.",
+                rationale="The model with the strongest detail fingerprint should dominate the late up blocks.",
+                suggested_config={
+                    "mode": "perres",
+                    "backbone": structure_idx,
+                    "assignments": {
+                        "down_0_1": structure_idx,
+                        "down_2_3": structure_idx,
+                        "mid": semantics_idx,
+                        "up_0_1": detail_idx,
+                        "up_2_3": detail_idx,
+                    },
+                    "attn2_locks": {"down": structure_idx, "mid": semantics_idx, "up": detail_idx},
+                },
+            )
+        )
+        recommendations.append(
+            Recommendation(
+                profile="prompt_fidelity",
+                priority="high",
+                message=f"Bias the semantic mid blocks and attention locks toward {models[semantics_idx].name}.",
+                rationale="Prompt fidelity is primarily influenced by semantic and attention-heavy regions.",
+                suggested_config={
+                    "mode": "hybrid",
+                    "backbone": semantics_idx,
+                    "hybrid_config": {
+                        "down_0_1": {structure_idx: 0.7, semantics_idx: 0.3},
+                        "down_2_3": {structure_idx: 0.6, semantics_idx: 0.4},
+                        "mid": {semantics_idx: 0.8, structure_idx: 0.2},
+                        "up_0_1": {detail_idx: 0.6, semantics_idx: 0.4},
+                        "up_2_3": {detail_idx: 0.6, semantics_idx: 0.4},
+                    },
+                    "attn2_locks": {"mid": semantics_idx},
+                },
+            )
+        )
+
+        if goal == "balanced":
+            return [recommendations[0]]
+        return [rec for rec in recommendations if rec.profile == goal] or recommendations
 
 
 def generate_analysis_report(results: Dict[str, Any]) -> str:
-    """
-    Format analysis results into readable text report.
-    
-    Args:
-        results: Dictionary containing analysis results
-        
-    Returns:
-        Formatted text report
-    """
-    lines = []
-    lines.append("=" * 80)
-    lines.append("XLFusion V1.3 - Model Analysis Report")
-    lines.append("=" * 80)
-    lines.append("")
-    
-    if 'diff_analysis' in results:
-        diff: DiffAnalysisResult = results['diff_analysis']
+    lines = [
+        "=" * 80,
+        "XLFusion V2.3 - Actionable Analysis Report",
+        "=" * 80,
+        "",
+    ]
+
+    if "diff_analysis" in results:
+        diff: DiffAnalysisResult = results["diff_analysis"]
         lines.append(f"DIFFERENCE ANALYSIS: {diff.model_a} vs {diff.model_b}")
-        lines.append(f"Overall Similarity: {diff.overall_similarity:.4f}")
-        lines.append(f"Significant Changes: {len(diff.significant_changes)} tensors")
+        lines.append(f"Overall similarity: {diff.overall_similarity:.4f}")
+        lines.append(f"Significant tensor changes: {len(diff.significant_changes)}")
+        if diff.risk_alerts:
+            lines.append("Risk alerts:")
+            for alert in diff.risk_alerts:
+                lines.append(f"  - {alert}")
+        lines.append("Dominance summary:")
+        for label, winner in diff.dominance_summary.items():
+            lines.append(f"  {label}: {winner}")
+        lines.append("Region summaries:")
+        for region, summary in sorted(diff.region_summaries.items()):
+            lines.append(
+                f"  {region}: cosine={summary['cosine_mean']:.4f}, "
+                f"relative_change={summary['relative_change_mean']:.4f}, tensors={int(summary['tensor_count'])}"
+            )
         lines.append("")
-        lines.append("Block-wise Statistics:")
-        for block, stats in diff.block_differences.items():
-            lines.append(f"  {block}:")
-            lines.append(f"    L2 Distance: {stats['l2_mean']:.6f} ± {stats['l2_std']:.6f}")
-            lines.append(f"    Cosine Similarity: {stats['cosine_mean']:.4f} ± {stats['cosine_std']:.4f}")
-            lines.append(f"    Relative Change: {stats['relative_change_mean']:.4f} (max: {stats['relative_change_max']:.4f})")
-        lines.append("")
-    
-    if 'compatibility' in results:
-        compat: CompatibilityReport = results['compatibility']
+
+    if "compatibility" in results:
+        compat: CompatibilityReport = results["compatibility"]
         lines.append("COMPATIBILITY ANALYSIS")
         lines.append(f"Models: {', '.join(compat.models)}")
-        lines.append(f"Compatibility Score: {compat.compatibility_score:.1f}/100")
-        lines.append(f"Architecture Match: {'✓' if compat.architecture_match else '✗'}")
-        if compat.warnings:
-            lines.append("Warnings:")
-            for warning in compat.warnings:
-                lines.append(f"  - {warning}")
+        lines.append(f"Compatibility score: {compat.compatibility_score:.1f}/100")
+        lines.append(f"Architecture match: {'yes' if compat.architecture_match else 'no'}")
+        for warning in compat.warnings:
+            lines.append(f"  warning: {warning}")
+        for alert in compat.risk_alerts:
+            lines.append(f"  risk: {alert}")
         lines.append("")
-    
-    if 'prediction' in results:
-        pred: PredictionReport = results['prediction']
+
+    if "prediction" in results:
+        pred: PredictionReport = results["prediction"]
         lines.append("FUSION PREDICTION")
-        lines.append(f"Diversity Score: {pred.diversity_score:.3f}")
-        lines.append("Predicted Dominance by Block:")
+        lines.append(f"Diversity score: {pred.diversity_score:.3f}")
+        if pred.recommended_backbone:
+            lines.append(f"Suggested backbone: {pred.recommended_backbone}")
         for block, dominance in pred.predicted_dominance.items():
             lines.append(f"  {block}: {dominance}")
-        if pred.warnings:
-            lines.append("Warnings:")
-            for warning in pred.warnings:
-                lines.append(f"  - {warning}")
+        for warning in pred.warnings:
+            lines.append(f"  warning: {warning}")
         lines.append("")
-    
-    if 'recommendations' in results:
-        recs: List[Recommendation] = results['recommendations']
+
+    if "recommendations" in results:
+        recs: List[Recommendation] = results["recommendations"]
         lines.append("RECOMMENDATIONS")
         for rec in recs:
-            priority_marker = "!!!" if rec.priority == "high" else "!!" if rec.priority == "medium" else "!"
-            lines.append(f"  [{priority_marker}] {rec.type.upper()}: {rec.message}")
+            lines.append(f"  [{rec.priority}] {rec.profile}: {rec.message}")
+            lines.append(f"    rationale: {rec.rationale}")
             if rec.suggested_config:
-                lines.append(f"      Config: {rec.suggested_config}")
+                lines.append(f"    config: {rec.suggested_config}")
         lines.append("")
-    
+
     lines.append("=" * 80)
-    
     return "\n".join(lines)
 
 
 def export_analysis_json(results: Dict[str, Any], output_path: Path) -> None:
-    """
-    Export analysis results to JSON file.
-    
-    Args:
-        results: Dictionary containing analysis results
-        output_path: Path to output JSON file
-    """
-    import json
-    from dataclasses import asdict
-    
-    serializable_results = {}
-    
+    serializable: Dict[str, Any] = {}
     for key, value in results.items():
-        if hasattr(value, '__dataclass_fields__'):
-            serializable_results[key] = asdict(value)
-        elif isinstance(value, list) and value and hasattr(value[0], '__dataclass_fields__'):
-            serializable_results[key] = [asdict(item) for item in value]
+        if hasattr(value, "__dataclass_fields__"):
+            serializable[key] = asdict(value)
+        elif isinstance(value, list) and value and hasattr(value[0], "__dataclass_fields__"):
+            serializable[key] = [asdict(item) for item in value]
         else:
-            serializable_results[key] = value
-    
-    with open(output_path, 'w') as f:
-        json.dump(serializable_results, f, indent=2)
-    
-    print(f"Analysis exported to {output_path}")
-
-
-if __name__ == "__main__":
-    print("XLFusion V1.3 - Analyzer Module")
-    print("Import this module to use analysis capabilities:")
-    print("  from analyzer import ModelDiffAnalyzer, CompatibilityAnalyzer")
-    print("  from analyzer import FusionPredictor, RecommendationEngine")
+            serializable[key] = value
+    output_path.write_text(json.dumps(serializable, indent=2), encoding="utf-8")

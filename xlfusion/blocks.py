@@ -1,11 +1,18 @@
 """
-Block utilities for XLFusion
-Handles UNet block identification and cross-attention detection
+Block and component utilities for XLFusion.
 """
 from typing import Optional
 
 # SDXL A1111 style naming constants
 UNET_PREFIX = "model.diffusion_model."
+VAE_PREFIXES = ("first_stage_model.", "vae.")
+TEXT_ENCODER_PREFIXES = (
+    "conditioner.embedders.0.transformer.",
+    "conditioner.embedders.1.model.",
+    "cond_stage_model.",
+    "text_encoder.",
+    "text_encoder_2.",
+)
 
 
 def get_block_assignment(key: str) -> Optional[str]:
@@ -98,3 +105,34 @@ def is_cross_attn_key_legacy(k: str) -> bool:
     if not any(tok in s for tok in CROSS_TOKENS):
         return False
     return any(proj in s for proj in CROSS_PROJ)
+
+
+def classify_component_key(key: str) -> str:
+    """Classify a checkpoint key into a stable high-level component."""
+    if key.startswith(UNET_PREFIX):
+        return "unet"
+    if any(key.startswith(prefix) for prefix in VAE_PREFIXES):
+        return "vae"
+    if any(key.startswith(prefix) for prefix in TEXT_ENCODER_PREFIXES):
+        return "text_encoder"
+    return "other"
+
+
+def classify_submodule_key(key: str) -> str:
+    """Classify a tensor key into a coarse functional submodule."""
+    lowered = key.lower()
+    if ".attn2." in lowered:
+        return "cross_attention"
+    if ".attn1." in lowered:
+        return "self_attention"
+    if ".to_q." in lowered or ".to_k." in lowered or ".to_v." in lowered or ".to_out.0." in lowered:
+        return "attention_projection"
+    if ".mlp." in lowered or ".ff." in lowered:
+        return "mlp"
+    if ".resnets." in lowered or ".conv" in lowered:
+        return "convolution"
+    if ".norm" in lowered:
+        return "normalization"
+    if "embeddings" in lowered or ".embed" in lowered:
+        return "embedding"
+    return "other"

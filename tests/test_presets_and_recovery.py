@@ -21,6 +21,8 @@ class PresetRecoveryTests(unittest.TestCase):
                 backbone_idx=0,
                 output_name="PresetOutput",
                 execution={"mode": "low-memory", "progress": "simple", "log_every": 50},
+                only_unet=False,
+                component_policy={"vae": "backbone", "text_encoder": "exclude", "other": "exclude"},
                 hybrid_config={
                     "down_0_1": {0: 0.7, 1: 0.3},
                     "down_2_3": {0: 0.6, 1: 0.4},
@@ -38,6 +40,8 @@ class PresetRecoveryTests(unittest.TestCase):
             self.assertEqual(job.execution["mode"], "low-memory")
             self.assertEqual(runtime["mode"], "hybrid")
             self.assertEqual(runtime["config"]["attn2_locks"], {"up": 1})
+            self.assertFalse(runtime["config"]["only_unet"])
+            self.assertEqual(runtime["config"]["component_policy"]["vae"], "backbone")
 
     def test_metadata_recovery_detects_missing_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as td:

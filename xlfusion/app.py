@@ -10,12 +10,14 @@ Interactive and graphical SDXL checkpoint merger with three fusion modes:
 Current product scope:
 - Interactive CLI, guided GUI, and batch execution
 - Shared validation and preflight before merge execution
-- Analysis tools for comparison, compatibility, and recommendations
+- Actionable analysis tools for comparison, compatibility, risk detection, and recommendations
+- Explicit component scope for UNet, VAE, text encoder, and other tensors
+- Checkpoint algebra as an advanced CLI workflow
 - Reproducible metadata and exportable batch recreation files
 
 Expected folder structure:
   ./workspace/models     -> base checkpoints .safetensors
-  ./workspace/loras      -> LoRA files .safetensors (legacy mode only)
+  ./workspace/loras      -> LoRA files .safetensors
   ./workspace/output     -> merged outputs .safetensors
   ./workspace/metadata   -> audit logs meta_*.txt
 
@@ -30,6 +32,7 @@ from typing import List
 from .cli import (
     pick_backbone,
     prompt_block_merge,
+    prompt_component_scope,
     prompt_crossattn_boost,
     prompt_execution_options,
     prompt_hybrid_config,
@@ -41,8 +44,8 @@ from .cli import (
 )
 from .config import list_safetensors, resolve_app_context
 from .execution import execution_options_to_dict
-from .lora import apply_single_lora
-from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
+from .lora import apply_single_lora_with_report
+from .merge import merge_hybrid, merge_perres, stream_checkpoint_algebra_from_paths, stream_weighted_merge_from_paths
 from .presets import (
     batch_job_to_runtime_state,
     inspect_recovery_source,
@@ -74,7 +77,7 @@ except ImportError:
 
 
 def analyze_mode(args, models_dir: Path, output_dir: Path) -> int:
-    """Execute analysis mode operations"""
+    """Execute analysis mode operations."""
     if not ANALYZER_AVAILABLE:
         print("Error: Analyzer module not available.")
         print("Make sure xlfusion/analyzer.py is available")
@@ -147,16 +150,12 @@ def analyze_mode(args, models_dir: Path, output_dir: Path) -> int:
         selected_models = [model_files[i] for i in selected_idx]
         
         engine = RecommendationEngine()
-        results['recommendations'] = engine.generate_recommendations(
-            selected_models,
-            goal
-        )
-        
+        recommendations = engine.generate_recommendations(selected_models, goal)
+        results['recommendations'] = recommendations
+
         predictor = FusionPredictor()
-        results['prediction'] = predictor.predict_fusion_characteristics(
-            selected_models,
-            {'mode': 'balanced'}
-        )
+        suggested = recommendations[0].suggested_config if recommendations else {"mode": "legacy", "weights": [0.5, 0.5]}
+        results['prediction'] = predictor.predict_fusion_characteristics(selected_models, suggested or {"mode": "legacy"})
     
     # Generate report
     if results:
@@ -184,8 +183,12 @@ def main() -> int:
     # Analysis mode arguments
     parser.add_argument("--analyze", action="store_true", help="Run in analysis mode")
     parser.add_argument("--compare", nargs=2, metavar=('MODEL1', 'MODEL2'), help="Compare two models (indices)")
-    parser.add_argument("--recommend", choices=['style_transfer', 'detail_enhance', 'balanced'], help="Generate recommendations for fusion goal")
+    parser.add_argument("--recommend", choices=['style_transfer', 'detail_recovery', 'prompt_fidelity', 'detail_enhance', 'balanced'], help="Generate recommendations for fusion goal")
     parser.add_argument("--export-analysis", type=Path, metavar='PATH', help="Export analysis to JSON file")
+    parser.add_argument("--algebra", nargs=3, metavar=("A", "B", "C"), help="Run checkpoint algebra A + alpha(B - C) using model indices")
+    parser.add_argument("--alpha", type=float, default=0.5, help="Alpha factor for checkpoint algebra")
+    parser.add_argument("--algebra-output", type=str, metavar="NAME", help="Output base name for checkpoint algebra")
+    parser.add_argument("--include-non-unet", action="store_true", help="Include non-UNet tensors in checkpoint algebra")
     parser.add_argument("--gui", action="store_true", help="Launch graphical interface")
     parser.add_argument("--recover-metadata", type=Path, help="Inspect a metadata folder and reconstruct its batch job")
     parser.add_argument("--export-recovered", type=Path, metavar="PATH", help="Save the recovered batch YAML to a new path")
@@ -202,7 +205,7 @@ def main() -> int:
     metadata_dir = context.metadata_dir
 
     if args.gui:
-        if any([args.batch, args.analyze, args.compare, args.recommend, args.recover_metadata]):
+        if any([args.batch, args.analyze, args.compare, args.recommend, args.recover_metadata, args.algebra]):
             print("The --gui option cannot be combined with batch or analysis modes.")
             return 1
         from .gui_app import launch_gui
@@ -210,7 +213,7 @@ def main() -> int:
         return 0
 
     if args.recover_metadata:
-        if args.batch or args.analyze or args.compare or args.recommend:
+        if args.batch or args.analyze or args.compare or args.recommend or args.algebra:
             print("The recovery flow cannot be combined with batch or analysis modes.")
             return 1
         try:
@@ -262,6 +265,64 @@ def main() -> int:
             results = processor.process_batch()
             return 0 if results["failed_jobs"] == 0 else 1
 
+        return 0
+
+    if args.algebra:
+        model_files = list_safetensors(models_dir)
+        if not model_files:
+            print(f"No models found in {models_dir}")
+            return 1
+        try:
+            a_idx, b_idx, c_idx = [int(item) for item in args.algebra]
+        except ValueError:
+            print("Error: checkpoint algebra indices must be integers")
+            return 1
+        for idx in (a_idx, b_idx, c_idx):
+            if idx < 0 or idx >= len(model_files):
+                print(f"Error: invalid checkpoint algebra index {idx} (0-{len(model_files) - 1})")
+                return 1
+
+        model_paths = [model_files[a_idx], model_files[b_idx], model_files[c_idx]]
+        output_base_name = args.algebra_output or context.config["model_output"]["base_name"]
+        only_unet = not args.include_non_unet
+        component_policy = None if only_unet else {"vae": "merge", "text_encoder": "merge", "other": "merge"}
+        merged, _stats, audit = stream_checkpoint_algebra_from_paths(
+            model_paths,
+            args.alpha,
+            a_idx=0,
+            b_idx=1,
+            c_idx=2,
+            only_unet=only_unet,
+            component_policy=component_policy,
+            execution=execution_options_to_dict(None),
+        )
+        yaml_kwargs = {
+            "weights": [1.0, args.alpha, -args.alpha],
+            "only_unet": only_unet,
+            "component_policy": component_policy,
+        }
+        output_path, metadata_folder, version = save_merge_results(
+            output_dir,
+            metadata_dir,
+            merged,
+            [path.name for path in model_paths],
+            "legacy",
+            0,
+            yaml_kwargs,
+            model_paths=model_paths,
+            output_base_name=output_base_name,
+            extra_metadata={
+                "operation": "checkpoint_algebra",
+                "formula": "A + alpha(B - C)",
+                "alpha": str(args.alpha),
+            },
+            execution=execution_options_to_dict(None),
+            job_name="CLI_checkpoint_algebra",
+            job_description="Advanced checkpoint algebra run",
+            audit_sections={"checkpoint_algebra": audit},
+        )
+        print(f"Checkpoint algebra completed: {output_path.name} (V{version})")
+        print(f"Metadata saved to: {metadata_folder}")
         return 0
 
     # Check for analysis mode
@@ -321,6 +382,8 @@ def main() -> int:
     attn2_locks = None
     hybrid_config = None
     lora_selections = []
+    only_unet = None
+    component_policy = None
 
     preset_source = input("\nLoad preset YAML or metadata folder [Enter to skip]: ").strip()
     loaded_runtime = None
@@ -366,6 +429,8 @@ def main() -> int:
             hybrid_config = config.get("hybrid_config")
             attn2_locks = config.get("attn2_locks")
             backbone_idx = 0
+        only_unet = config.get("only_unet")
+        component_policy = config.get("component_policy")
         lora_selections = list(config.get("loras", []))
 
         adjust_exec = input("Adjust execution profile from the preset? [y/N]: ").strip().lower()
@@ -408,14 +473,15 @@ def main() -> int:
             hybrid_config, attn2_locks = prompt_hybrid_config(model_names)
             backbone_idx = 0
 
+        mode_name = ["legacy", "perres", "hybrid"][mode]
+        only_unet, component_policy = prompt_component_scope(mode_name)
+
         lora_files = list_safetensors(loras_dir)
         if lora_files:
             lora_selections = prompt_loras(lora_files)
 
         output_base_name = prompt_output_name(default_output_name) or default_output_name
         execution_options = prompt_execution_options()
-
-        mode_name = ["legacy", "perres", "hybrid"][mode]
 
     if not loaded_runtime:
         mode_name = ["legacy", "perres", "hybrid"][mode]
@@ -432,6 +498,8 @@ def main() -> int:
         crossattn_boosts=crossattn_boosts if mode == 0 else None,
         loras=lora_selections,
         loras_dir=loras_dir,
+        only_unet=only_unet,
+        component_policy=component_policy,
     )
 
     if not validation.valid:
@@ -480,6 +548,8 @@ def main() -> int:
                 block_multipliers=validation.normalized.get("block_multipliers"),
                 crossattn_boosts=validation.normalized.get("crossattn_boosts"),
                 loras=lora_yaml,
+                only_unet=validation.normalized.get("only_unet"),
+                component_policy=validation.normalized.get("component_policy"),
             )
             print(f"Preset saved to: {preset_path}")
         proceed = input(
@@ -493,7 +563,11 @@ def main() -> int:
     model_names = validation.normalized["model_names"]
     backbone_idx = validation.normalized["backbone_idx"]
     normalized_loras = validation.normalized["loras"]
-    yaml_kwargs = {}
+    yaml_kwargs = {
+        "only_unet": validation.normalized.get("only_unet"),
+        "component_policy": validation.normalized.get("component_policy"),
+    }
+    lora_reports = []
 
     if mode == 0:
         weights = validation.normalized["weights"]
@@ -503,7 +577,8 @@ def main() -> int:
             model_paths,
             weights,
             backbone_idx,
-            only_unet=True,
+            only_unet=bool(validation.normalized.get("only_unet")),
+            component_policy=validation.normalized.get("component_policy"),
             block_multipliers=block_weights,
             crossattn_boosts=crossattn_boosts,
             execution=execution_options,
@@ -521,6 +596,8 @@ def main() -> int:
             assignments,
             backbone_idx,
             attn2_locks,
+            only_unet=bool(validation.normalized.get("only_unet")),
+            component_policy=validation.normalized.get("component_policy"),
             execution=execution_options,
         )
         yaml_kwargs["assignments"] = assignments
@@ -534,6 +611,8 @@ def main() -> int:
             hybrid_config,
             backbone_idx,
             attn2_locks,
+            only_unet=bool(validation.normalized.get("only_unet")),
+            component_policy=validation.normalized.get("component_policy"),
             execution=execution_options,
         )
         yaml_kwargs["hybrid_config"] = hybrid_config
@@ -546,8 +625,12 @@ def main() -> int:
             for item in normalized_loras
         ]
         for lora_spec in normalized_loras:
-            applied, skipped = apply_single_lora(merged, lora_spec["path"], lora_spec["scale"])
-            print(f"LoRA {lora_spec['file']}: applied {applied}, skipped {skipped}")
+            report = apply_single_lora_with_report(merged, lora_spec["path"], lora_spec["scale"])
+            lora_reports.append(report.to_dict())
+            print(
+                f"LoRA {lora_spec['file']}: applied {report.applied_pairs}, skipped {report.skipped_pairs}, "
+                f"by component={report.applied_by_component}"
+            )
 
     output_path, metadata_folder, version = save_merge_results(
         output_dir,
@@ -563,6 +646,7 @@ def main() -> int:
         execution=execution_options_to_dict(execution_options),
         job_name=f"Interactive_{mode_name}",
         job_description="Interactive CLI run",
+        audit_sections={"lora_application": lora_reports} if lora_reports else None,
     )
 
     print(f"\nSaved: {output_path.name}")

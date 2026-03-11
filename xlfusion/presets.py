@@ -37,6 +37,8 @@ def save_single_job_preset(
     block_multipliers: Optional[list[Dict[str, Any]]] = None,
     crossattn_boosts: Optional[list[Dict[str, Any]]] = None,
     loras: Optional[list[Dict[str, Any]]] = None,
+    only_unet: Optional[bool] = None,
+    component_policy: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """Write a reusable single-job batch preset."""
     if not YAML_AVAILABLE:
@@ -59,6 +61,8 @@ def save_single_job_preset(
         block_multipliers=block_multipliers,
         crossattn_boosts=crossattn_boosts,
         loras=loras,
+        only_unet=only_unet,
+        component_policy=component_policy,
     )
     destination.write_text(preset_yaml, encoding="utf-8")
     return destination
@@ -87,6 +91,8 @@ def batch_job_to_runtime_state(job: BatchJob) -> Dict[str, Any]:
             "backbone_idx": int(job.backbone),
             "block_multipliers": job.block_multipliers,
             "crossattn_boosts": job.crossattn_boosts,
+            "only_unet": job.only_unet,
+            "component_policy": job.component_policy,
             "loras": [
                 {"file": item["file"], "scale": item.get("scale", 1.0)}
                 for item in (job.loras or [])
@@ -96,6 +102,8 @@ def batch_job_to_runtime_state(job: BatchJob) -> Dict[str, Any]:
         runtime["config"] = {
             "assignments": job.assignments or {},
             "attn2_locks": job.attn2_locks,
+            "only_unet": job.only_unet,
+            "component_policy": job.component_policy,
             "loras": [
                 {"file": item["file"], "scale": item.get("scale", 1.0)}
                 for item in (job.loras or [])
@@ -105,6 +113,8 @@ def batch_job_to_runtime_state(job: BatchJob) -> Dict[str, Any]:
         runtime["config"] = {
             "hybrid_config": job.hybrid_config or {},
             "attn2_locks": job.attn2_locks,
+            "only_unet": job.only_unet,
+            "component_policy": job.component_policy,
             "loras": [
                 {"file": item["file"], "scale": item.get("scale", 1.0)}
                 for item in (job.loras or [])

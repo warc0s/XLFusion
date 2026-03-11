@@ -14,11 +14,15 @@ class YamlLorasTests(unittest.TestCase):
             version=1,
             weights=[0.7, 0.3],
             loras=loras,
+            only_unet=False,
+            component_policy={"vae": "merge", "text_encoder": "exclude", "other": "exclude"},
         )
         data = yaml.safe_load(yml)
         job = data["batch_jobs"][0]
         self.assertIn("loras", job)
         self.assertEqual(job["loras"], loras)
+        self.assertFalse(job["only_unet"])
+        self.assertEqual(job["component_policy"]["vae"], "merge")
 
     def test_loras_in_perres_yaml(self):
         loras = [{"file": "l1.safetensors", "scale": 0.5}]
@@ -59,4 +63,3 @@ class YamlLorasTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

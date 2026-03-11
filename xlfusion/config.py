@@ -287,6 +287,8 @@ def generate_batch_config_yaml(
     block_multipliers: Optional[List[Dict[str, Any]]] = None,
     crossattn_boosts: Optional[List[Dict[str, Any]]] = None,
     loras: Optional[List[Dict[str, Any]]] = None,
+    only_unet: Optional[bool] = None,
+    component_policy: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Generate a batch configuration YAML compatible with XLFusion format."""
     if not YAML_AVAILABLE:
@@ -313,6 +315,10 @@ def generate_batch_config_yaml(
 
     if execution:
         job["execution"] = execution
+    if only_unet is not None:
+        job["only_unet"] = only_unet
+    if component_policy:
+        job["component_policy"] = component_policy
 
     if mode == "legacy":
         if weights is not None:

@@ -1,17 +1,19 @@
 # XLFusion
 
-XLFusion is a Python tool for merging SDXL checkpoints with a reproducible workflow across CLI, GUI, and batch execution. As of V2.15, the product code lives in `xlfusion/` and the user runtime lives in `workspace/`. It focuses on reliable validation, per-block control, low-memory execution, reusable presets, recoverable metadata, and lightweight analysis before or after a merge.
+XLFusion is a Python tool for merging SDXL checkpoints with a reproducible workflow across CLI, GUI, and batch execution. As of V2.3, the product code lives in `xlfusion/` and the user runtime lives in `workspace/`. It focuses on reliable validation, per-block control, low-memory execution, reusable presets, recoverable metadata, actionable analysis, checkpoint algebra, and explicit control over non-UNet components.
 
 ## What It Does
 
 - Merge SDXL-derived `.safetensors` checkpoints in three modes: `legacy`, `perres`, and `hybrid`
 - Bake LoRAs into the merged result
 - Validate configurations before execution in CLI, GUI, and batch
-- Show a preflight plan with estimated memory, backbone, affected blocks, effective locks, and compatibility warnings
+- Show a preflight plan with estimated memory, backbone, affected blocks, effective locks, component scope, compatibility warnings, and risk alerts
 - Run merges in `standard` or `low-memory` execution mode with shared progress handling
 - Save reusable presets as batch-compatible YAML and load them again in CLI, GUI, or batch
 - Save reproducible metadata and a batch YAML that can recreate the run
-- Analyze similarity, compatibility, and likely merge characteristics
+- Analyze similarity, compatibility, region/submodule dominance, and merge starting points
+- Apply checkpoint algebra with `A + alpha(B - C)` as an advanced workflow
+- Bake compatible LoRA weights into UNet and text encoder targets with an audit trail
 
 ## Merge Modes
 
@@ -98,7 +100,15 @@ Analysis:
 ```bash
 python XLFusion.py --analyze --compare 0 1
 python XLFusion.py --analyze --recommend balanced
+python XLFusion.py --analyze --recommend prompt_fidelity
 python XLFusion.py --analyze --compare 0 1 --export-analysis report.json
+```
+
+Checkpoint algebra:
+
+```bash
+python XLFusion.py --algebra 0 1 2 --alpha 0.35 --algebra-output AlgebraMix
+python XLFusion.py --algebra 0 1 2 --alpha 0.35 --include-non-unet
 ```
 
 ## CLI and GUI Workflow
@@ -111,6 +121,7 @@ The interactive flows now share the same execution guardrails:
 - the preflight can be exported to `.txt` or `.json`
 - reusable presets can be saved as single-job batch YAML files
 - metadata folders can be used to recover the exact batch configuration later
+- the merge scope for VAE, text encoder, and other non-UNet tensors is explicit
 
 The GUI also provides:
 
@@ -118,6 +129,7 @@ The GUI also provides:
 - per-block visual preview
 - real-time progress and cancellation
 - preset import/export and metadata recovery helpers
+- visible non-UNet scope controls that stay aligned with preflight and metadata
 
 ## Batch Workflow
 
@@ -125,8 +137,9 @@ Batch mode uses the same validator as CLI and GUI. That means:
 
 - file existence is checked before merge execution
 - weights, assignments, locks, backbone and LoRAs are validated centrally
-- memory and compatibility warnings are available during validation
+- memory, compatibility, and risk warnings are available during validation
 - execution settings can be stored per job for `low-memory` or `standard` runs
+- `only_unet` and `component_policy` are preserved in presets, batch YAML, and metadata recovery
 
 See:
 
@@ -148,16 +161,17 @@ Each run also creates a metadata folder in `workspace/metadata/` containing:
 - `metadata.txt`
 - `batch_config.yaml`
 
-The saved metadata includes source models, hashes, mode, backbone, execution settings, and merge parameters. Metadata is also embedded in the resulting `.safetensors` file.
+The saved metadata includes source models, hashes, mode, backbone, execution settings, merge parameters, component scope, and LoRA/algebra audit details when relevant. Metadata is also embedded in the resulting `.safetensors` file.
 
 ## Analysis
 
 The analysis tools are meant to support merge decisions, not just report raw numbers. Current outputs include:
 
-- cosine similarity by block
-- compatibility score and architecture warnings
-- difference summaries
-- prediction and recommendation helpers
+- cosine similarity by region and submodule
+- compatibility score, architecture warnings, and risk alerts
+- histograms and summaries for structure, semantics, style, and detail-heavy regions
+- recommendation profiles for `balanced`, `style_transfer`, `detail_recovery`, and `prompt_fidelity`
+- predicted dominance by block from a suggested config
 
 ## Validation and Testing
 
@@ -177,7 +191,7 @@ The smoke test generates synthetic models, runs a bounded batch scenario, and re
 
 ## Future Work
 
-`ROADMAP.md` now starts after the already implemented package/runtime reorganization, validation foundation, low-memory execution, presets, and metadata recovery. The remaining roadmap focuses on deeper merge analysis and longer-term platform evolution.
+`ROADMAP.md` now starts after the already implemented package/runtime reorganization, validation foundation, actionable analysis, checkpoint algebra, explicit component scope, low-memory execution, presets, and metadata recovery. The remaining roadmap focuses on platform evolution and broader regression coverage.
 
 ## Credits
 

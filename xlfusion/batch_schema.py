@@ -35,6 +35,8 @@ class BatchJob:
     crossattn_boosts: Optional[List[Dict[str, float]]] = None
     loras: Optional[List[Dict[str, Any]]] = None
     execution: Optional[Dict[str, Any]] = None
+    only_unet: Optional[bool] = None
+    component_policy: Optional[Dict[str, str]] = None
 
     template: Optional[str] = None
     template_params: Optional[Dict[str, Any]] = None
@@ -107,6 +109,8 @@ class BatchValidator:
             crossattn_boosts=job.crossattn_boosts,
             loras=job.loras,
             loras_dir=self.context.loras_dir,
+            only_unet=job.only_unet,
+            component_policy=job.component_policy,
         )
 
         for issue in validation.errors:
@@ -134,6 +138,8 @@ class BatchValidator:
         if job.execution is not None and not isinstance(job.execution, dict):
             self.errors.append(f"{prefix} execution: must be a mapping when provided")
             return
+        job.only_unet = validation.normalized.get("only_unet")
+        job.component_policy = validation.normalized.get("component_policy")
         job.preflight = validation.preflight
 
 

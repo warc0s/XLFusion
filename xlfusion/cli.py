@@ -45,6 +45,37 @@ def prompt_execution_options() -> Dict[str, object]:
     }
 
 
+def prompt_component_scope(mode: str) -> Tuple[bool, Dict[str, str]]:
+    print("\nComponent scope:")
+    print("UNet is always included.")
+    if mode == "legacy":
+        print("For Legacy mode, included non-UNet components are weighted-merged.")
+        default_include = {"vae": False, "text_encoder": False, "other": False}
+        include_action = "merge"
+    else:
+        print("For PerRes/Hybrid modes, included non-UNet components are copied from the backbone.")
+        default_include = {"vae": True, "text_encoder": True, "other": True}
+        include_action = "backbone"
+
+    policy: Dict[str, str] = {}
+    for component, label in [
+        ("vae", "Include VAE"),
+        ("text_encoder", "Include text encoder"),
+        ("other", "Include other non-UNet tensors"),
+    ]:
+        default = "Y/n" if default_include[component] else "y/N"
+        raw = input(f"{label}? [{default}]: ").strip().lower()
+        include = default_include[component]
+        if raw in {"y", "yes"}:
+            include = True
+        elif raw in {"n", "no"}:
+            include = False
+        policy[component] = include_action if include else "exclude"
+
+    only_unet = all(action == "exclude" for action in policy.values())
+    return only_unet, policy
+
+
 def prompt_select(items: List[Path], title: str, default_idx: List[int]) -> List[int]:
     print(f"\n{title}")
     for i, p in enumerate(items):
