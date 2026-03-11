@@ -1,6 +1,6 @@
 # XLFusion Roadmap
 
-Current status: `main` already covers the package/runtime reorganization, shared validation and preflight, actionable analysis, checkpoint algebra, explicit component scope, LoRA audit reporting, reproducible metadata, CLI/GUI/batch execution, presets, and metadata recovery. This roadmap only tracks future improvements that still add real value to the product.
+Current status: `main` already covers the package/runtime reorganization, shared validation and preflight, actionable analysis, checkpoint algebra, explicit component scope, LoRA audit reporting, reproducible metadata, CLI/GUI/batch execution, presets, metadata recovery, and the V2.4 platform work (shared merge runtime, shared types, and a block-mapping registry for future partitions). This roadmap only tracks future improvements that still add real value to the product.
 
 ## Principles For Upcoming Versions
 
@@ -8,26 +8,6 @@ Current status: `main` already covers the package/runtime reorganization, shared
 - Improve memory usage and speed without sacrificing reproducibility.
 - Keep the experience aligned across CLI, GUI, and batch.
 - Turn analysis into something that actively helps users make better merge decisions.
-
-## V2.4 Platform And Internal Evolution
-
-Goal: make it easier for the project to keep growing without repeating logic or introducing regressions.
-
-### 1. Clearer Internal API
-
-- Better separate the `config`, `merge`, `workflow`, `analysis`, and GUI layers.
-- Reduce duplication between interactive CLI, batch, and GUI.
-- Formalize shared configuration types.
-
-### 2. Test Coverage Focused On Real Regressions
-
-- Prioritize tests around validation, cancellation, reproducible metadata, low-memory modes, and checkpoint algebra.
-- Add synthetic fixtures to compare outputs across different execution paths.
-
-### 3. Future Architectures Without Touching The Core
-
-- Prepare a registry of block mappings to support other partitions or derived architectures without changing the main engine.
-- Keep SDXL as the primary path while avoiding unnecessary coupling.
 
 ## V2.5 Full Coverage Of The Current Product
 
@@ -80,5 +60,4 @@ Acceptance criteria:
 
 ## Recommended Priorities
 
-1. V2.4 Platform And Internal Evolution
-2. V2.5 Full Coverage Of The Current Product
+1. V2.5 Full Coverage Of The Current Product

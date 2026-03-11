@@ -1,7 +1,10 @@
 """
 Block and component utilities for XLFusion.
 """
-from typing import Optional
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Callable, Optional
 
 # SDXL A1111 style naming constants
 UNET_PREFIX = "model.diffusion_model."
@@ -13,6 +16,62 @@ TEXT_ENCODER_PREFIXES = (
     "text_encoder.",
     "text_encoder_2.",
 )
+
+SDXL_BLOCK_GROUPS = ("down_0_1", "down_2_3", "mid", "up_0_1", "up_2_3")
+SDXL_LEGACY_GROUPS = ("down", "mid", "up", "other")
+SDXL_ATTN_BLOCKS = ("down", "mid", "up")
+
+
+@dataclass(frozen=True)
+class BlockMapping:
+    """Block mapping registry entry for a checkpoint architecture/partition.
+
+    For now, XLFusion ships with a single SDXL mapping. The registry exists so
+    derived architectures can be added without rewriting the core merge logic.
+    """
+
+    name: str
+    block_groups: tuple[str, ...]
+    legacy_groups: tuple[str, ...]
+    attn_blocks: tuple[str, ...]
+    block_assignment_fn: Callable[[str], Optional[str]]
+    coarse_group_fn: Callable[[str], Optional[str]]
+    is_cross_attn_fn: Callable[[str], bool]
+    attn_block_type_fn: Callable[[str], Optional[str]]
+
+    def get_block_assignment(self, key: str) -> Optional[str]:
+        return self.block_assignment_fn(key)
+
+    def group_for_key(self, key: str) -> Optional[str]:
+        return self.coarse_group_fn(key)
+
+    def is_cross_attn_key(self, key: str) -> bool:
+        return self.is_cross_attn_fn(key)
+
+    def get_attn2_block_type(self, key: str) -> Optional[str]:
+        return self.attn_block_type_fn(key)
+
+
+_BLOCK_MAPPINGS = {
+    "sdxl": BlockMapping(
+        name="sdxl",
+        block_groups=SDXL_BLOCK_GROUPS,
+        legacy_groups=SDXL_LEGACY_GROUPS,
+        attn_blocks=SDXL_ATTN_BLOCKS,
+        block_assignment_fn=lambda key: get_block_assignment(key),
+        coarse_group_fn=lambda key: group_for_key(key),
+        is_cross_attn_fn=lambda key: is_cross_attn_key(key),
+        attn_block_type_fn=lambda key: get_attn2_block_type(key),
+    )
+}
+
+
+def get_block_mapping(name: str = "sdxl") -> BlockMapping:
+    """Return a registered block mapping by name."""
+    try:
+        return _BLOCK_MAPPINGS[name]
+    except KeyError as exc:
+        raise KeyError(f"Unknown block mapping '{name}'. Available: {sorted(_BLOCK_MAPPINGS)}") from exc
 
 
 def get_block_assignment(key: str) -> Optional[str]:

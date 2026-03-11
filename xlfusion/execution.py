@@ -12,7 +12,7 @@ except ImportError:  # pragma: no cover - optional dependency
     tqdm = None
     TQDM_AVAILABLE = False
 
-from .blocks import get_block_assignment, group_for_key
+from .blocks import BlockMapping, get_block_mapping
 
 
 EXECUTION_MODES = {"standard", "low-memory"}
@@ -70,7 +70,13 @@ def execution_options_to_dict(raw: Optional[Any]) -> Dict[str, Any]:
     return asdict(normalize_execution_options(raw))
 
 
-def build_processing_order(base_keys: Sequence[str], extra_key_sets: Iterable[Iterable[str]], *, sort_keys: bool) -> List[str]:
+def build_processing_order(
+    base_keys: Sequence[str],
+    extra_key_sets: Iterable[Iterable[str]],
+    *,
+    sort_keys: bool,
+    block_mapping: object = "sdxl",
+) -> List[str]:
     """Build the ordered list of unique tensor keys that will be processed."""
     seen = set()
     ordered: List[str] = []
@@ -89,12 +95,22 @@ def build_processing_order(base_keys: Sequence[str], extra_key_sets: Iterable[It
     if not sort_keys:
         return ordered
 
-    return sorted(ordered, key=_sort_key)
+    mapping = _resolve_block_mapping(block_mapping)
+    return sorted(ordered, key=lambda key: _sort_key(key, mapping))
+
+def _resolve_block_mapping(value: object) -> BlockMapping:
+    if isinstance(value, BlockMapping):
+        return value
+    if value is None:
+        return get_block_mapping("sdxl")
+    if isinstance(value, str):
+        return get_block_mapping(value)
+    raise TypeError("block_mapping must be a BlockMapping, a string name, or None")
 
 
-def _sort_key(key: str) -> tuple[int, str]:
-    block_group = get_block_assignment(key)
-    coarse_group = block_group.split("_", 1)[0] if block_group else (group_for_key(key) or "other")
+def _sort_key(key: str, mapping: BlockMapping) -> tuple[int, str]:
+    block_group = mapping.get_block_assignment(key)
+    coarse_group = block_group.split("_", 1)[0] if block_group else (mapping.group_for_key(key) or "other")
     return (_GROUP_ORDER.get(coarse_group, _GROUP_ORDER["other"]), key)
 
 

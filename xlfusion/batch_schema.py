@@ -22,6 +22,7 @@ class BatchJob:
 
     name: str
     mode: str
+    block_mapping: str = "sdxl"
     description: str = ""
     models: List[str] = field(default_factory=list)
     backbone: Union[int, str] = 0
@@ -111,6 +112,7 @@ class BatchValidator:
             loras_dir=self.context.loras_dir,
             only_unet=job.only_unet,
             component_policy=job.component_policy,
+            block_mapping=job.block_mapping,
         )
 
         for issue in validation.errors:
@@ -141,6 +143,7 @@ class BatchValidator:
         job.only_unet = validation.normalized.get("only_unet")
         job.component_policy = validation.normalized.get("component_policy")
         job.preflight = validation.preflight
+        job.block_mapping = str(validation.normalized.get("block_mapping", job.block_mapping))
 
 
 def load_batch_config(config_path: Path) -> BatchConfig:

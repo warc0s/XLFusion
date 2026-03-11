@@ -15,11 +15,9 @@ except ImportError:
 
 from .batch_schema import BatchConfig, BatchJob
 from .config import AppContext, resolve_app_context
-from .execution import execution_options_to_dict
-from .lora import apply_single_lora_with_report
-from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
 from .validation import format_preflight_plan
-from .workflow import save_merge_results
+from .runtime import execute_merge_job
+from .types import MergeJobConfig
 
 
 class BatchProcessor:
@@ -121,126 +119,41 @@ class BatchProcessor:
         if not isinstance(job.backbone_idx, int):
             raise ValueError("Validated backbone index is missing")
 
-        merged_state = self._merge_job(job)
-        if merged_state is None:
-            raise ValueError(f"Unsupported mode: {job.mode}")
-
-        lora_reports = self._apply_loras(job, merged_state)
-
         output_dir = self.context.output_dir / self.config.global_settings.get("output_base", "batch_output")
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        job.keys_processed = len(merged_state)
-        output_path, metadata_folder, version = save_merge_results(
-            output_dir,
-            self.context.metadata_dir,
-            merged_state,
-            job.models,
-            job.mode,
-            job.backbone_idx,
-            self._build_yaml_kwargs(job),
-            model_paths=job.model_paths,
-            lora_paths=[self.context.loras_dir / spec["file"] for spec in (job.loras or [])] or None,
+        loras = None
+        if job.loras:
+            loras = [
+                {"file": item["file"], "scale": item.get("scale", 1.0), "path": self.context.loras_dir / item["file"]}
+                for item in job.loras
+            ]
+
+        merge_job = MergeJobConfig(
+            mode=job.mode,
+            model_paths=list(job.model_paths),
+            model_names=list(job.models),
+            backbone_idx=int(job.backbone_idx),
+            block_mapping=str(getattr(job, "block_mapping", "sdxl")),
             output_base_name=job.output_name,
-            extra_metadata={"batch_job": job.name, "description": job.description},
-            execution=execution_options_to_dict(job.execution),
+            weights=job.weights,
+            assignments=job.assignments,
+            hybrid_config=job.hybrid_config,
+            attn2_locks=job.attn2_locks,
+            block_multipliers=job.block_multipliers,
+            crossattn_boosts=job.crossattn_boosts,
+            loras=loras,
+            only_unet=bool(job.only_unet) if job.only_unet is not None else True,
+            component_policy=job.component_policy,
+            execution=job.execution,
             job_name=job.name,
             job_description=job.description,
-            audit_sections={"lora_application": lora_reports} if lora_reports else None,
         )
-        job.output_path = output_path
-        job.version = version
+
+        result = execute_merge_job(output_dir, self.context.metadata_dir, merge_job)
+        job.keys_processed = int(result.keys_processed)
+        job.output_path = result.output_path
+        job.version = int(result.version)
         job.success = True
         self.logger.info(f"Saved model to {job.output_path}")
-        self.logger.info(f"Metadata saved to: {metadata_folder.name}/")
-
-    def _merge_job(self, job: BatchJob):
-        if job.mode == "legacy":
-            if job.weights is None:
-                raise ValueError("Legacy mode requires weights")
-            merged_state, _ = stream_weighted_merge_from_paths(
-                job.model_paths,
-                job.weights,
-                job.backbone_idx,
-                only_unet=bool(job.only_unet) if job.only_unet is not None else True,
-                component_policy=job.component_policy,
-                block_multipliers=job.block_multipliers,
-                crossattn_boosts=job.crossattn_boosts,
-                execution=job.execution,
-            )
-            return merged_state
-
-        if job.mode == "perres":
-            if job.assignments is None:
-                raise ValueError("PerRes mode requires assignments")
-            return merge_perres(
-                job.model_paths,
-                job.assignments,
-                job.backbone_idx,
-                job.attn2_locks,
-                only_unet=bool(job.only_unet),
-                component_policy=job.component_policy,
-                execution=job.execution,
-            )
-
-        if job.mode == "hybrid":
-            if job.hybrid_config is None:
-                raise ValueError("Hybrid mode requires hybrid_config")
-            return merge_hybrid(
-                job.model_paths,
-                job.hybrid_config,
-                job.backbone_idx,
-                job.attn2_locks,
-                only_unet=bool(job.only_unet),
-                component_policy=job.component_policy,
-                execution=job.execution,
-            )
-
-        return None
-
-    def _apply_loras(self, job: BatchJob, merged_state: Dict[str, Any]) -> list[Dict[str, Any]]:
-        if not job.loras:
-            return []
-
-        reports: list[Dict[str, Any]] = []
-        for lora_spec in job.loras:
-            lora_path = self.context.loras_dir / lora_spec["file"]
-            scale = lora_spec.get("scale", 0.3)
-            report = apply_single_lora_with_report(merged_state, lora_path, scale)
-            reports.append(report.to_dict())
-            self.logger.info(
-                f"Applied LoRA {lora_spec['file']}: {report.applied_pairs} applied, "
-                f"{report.skipped_pairs} skipped, by component={report.applied_by_component}"
-            )
-        return reports
-
-    def _build_yaml_kwargs(self, job: BatchJob) -> Dict[str, Any]:
-        yaml_kwargs: Dict[str, Any] = {}
-
-        if job.mode == "legacy":
-            if job.weights:
-                yaml_kwargs["weights"] = job.weights
-            if job.block_multipliers:
-                yaml_kwargs["block_multipliers"] = job.block_multipliers
-            if job.crossattn_boosts:
-                yaml_kwargs["crossattn_boosts"] = job.crossattn_boosts
-        elif job.mode == "perres":
-            if job.assignments:
-                yaml_kwargs["assignments"] = job.assignments
-            if job.attn2_locks:
-                yaml_kwargs["attn2_locks"] = job.attn2_locks
-        elif job.mode == "hybrid":
-            if job.hybrid_config:
-                yaml_kwargs["hybrid_config"] = job.hybrid_config
-            if job.attn2_locks:
-                yaml_kwargs["attn2_locks"] = job.attn2_locks
-
-        if job.loras:
-            yaml_kwargs["loras"] = job.loras
-        if job.execution:
-            yaml_kwargs["execution"] = execution_options_to_dict(job.execution)
-        if job.only_unet is not None:
-            yaml_kwargs["only_unet"] = job.only_unet
-        if job.component_policy:
-            yaml_kwargs["component_policy"] = job.component_policy
-        return yaml_kwargs
+        self.logger.info(f"Metadata saved to: {result.metadata_folder.name}/")

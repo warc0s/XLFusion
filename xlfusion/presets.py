@@ -28,6 +28,7 @@ def save_single_job_preset(
     backbone_idx: int,
     output_name: Optional[str] = None,
     execution: Optional[Dict[str, Any]] = None,
+    block_mapping: Optional[str] = None,
     job_name: str = "SavedPreset",
     description: str = "Saved preset from XLFusion",
     weights: Optional[list[float]] = None,
@@ -54,6 +55,7 @@ def save_single_job_preset(
         job_description=description,
         output_name=output_name,
         execution=execution_options_to_dict(execution),
+        block_mapping=block_mapping,
         weights=weights,
         assignments=assignments,
         hybrid_config=hybrid_config,
@@ -84,6 +86,7 @@ def batch_job_to_runtime_state(job: BatchJob) -> Dict[str, Any]:
         "models": list(job.models),
         "output_name": job.output_name,
         "execution": execution,
+        "block_mapping": getattr(job, "block_mapping", "sdxl"),
     }
     if job.mode == "legacy":
         runtime["config"] = {

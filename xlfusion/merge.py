@@ -14,10 +14,12 @@ import torch
 from safetensors.torch import safe_open
 
 from .blocks import (
+    BlockMapping,
     UNET_PREFIX,
     classify_component_key,
     get_attn2_block_type,
     get_block_assignment,
+    get_block_mapping,
     group_for_key,
     is_cross_attn_key,
 )
@@ -35,6 +37,16 @@ COMPONENT_POLICY_DEFAULTS = {
 
 class MergeCancelled(Exception):
     """Signal to cancel an ongoing merge process."""
+
+
+def _resolve_block_mapping(value: object) -> BlockMapping:
+    if isinstance(value, BlockMapping):
+        return value
+    if value is None:
+        return get_block_mapping("sdxl")
+    if isinstance(value, str):
+        return get_block_mapping(value)
+    raise TypeError("block_mapping must be a BlockMapping, a string name, or None")
 
 
 def _accumulation_dtype_for(tensor: torch.Tensor) -> torch.dtype:
@@ -105,13 +117,18 @@ def _copy_backbone_key(
     return True
 
 
-def validate_hybrid_config(hybrid_config: Dict[str, Any], model_count: int) -> List[str]:
+def validate_hybrid_config(
+    hybrid_config: Dict[str, Any],
+    model_count: int,
+    *,
+    block_groups: Optional[Iterable[str]] = None,
+) -> List[str]:
     """Validate hybrid configuration and return warnings."""
     config = copy.deepcopy(hybrid_config)
     warnings: List[str] = []
     errors: List[str] = []
 
-    required_blocks = ["down_0_1", "down_2_3", "mid", "up_0_1", "up_2_3"]
+    required_blocks = list(block_groups) if block_groups else ["down_0_1", "down_2_3", "mid", "up_0_1", "up_2_3"]
     for block in required_blocks:
         if block not in config:
             errors.append(f"Missing required block: {block}")
@@ -195,12 +212,14 @@ def merge_hybrid(
     progress_cb: Optional[Callable[[str, int], None]] = None,
     cancel_event: Optional[threading.Event] = None,
     cancel_every: int = 1,
+    block_mapping: object = "sdxl",
 ) -> Dict[str, torch.Tensor]:
     """Hybrid mode fusion with optional non-UNet backbone preservation."""
     execution_options = normalize_execution_options(execution)
+    mapping = _resolve_block_mapping(block_mapping)
     print(f"\nStarting Hybrid fusion ({execution_options.mode})...")
 
-    warnings = validate_hybrid_config(hybrid_config, len(model_paths))
+    warnings = validate_hybrid_config(hybrid_config, len(model_paths), block_groups=mapping.block_groups)
     if warnings:
         print("Configuration warnings:")
         for warning in warnings:
@@ -241,7 +260,12 @@ def merge_hybrid(
 
         base_handle = handles[backbone_idx]
         base_keys = key_sets[backbone_idx]
-        ordered_keys = build_processing_order(list(base_keys), key_sets.values(), sort_keys=execution_options.sort_keys)
+        ordered_keys = build_processing_order(
+            list(base_keys),
+            key_sets.values(),
+            sort_keys=execution_options.sort_keys,
+            block_mapping=mapping,
+        )
         processed = [0]
 
         with ProgressReporter(len(ordered_keys), "Hybrid merge", execution_options, progress_cb=progress_cb) as reporter:
@@ -256,8 +280,8 @@ def merge_hybrid(
                     _tick_progress(reporter, processed=processed, cancel_event=cancel_event, cancel_every=cancel_every)
                     continue
 
-                if attn2_locks and is_cross_attn_key(key):
-                    block_type = get_attn2_block_type(key)
+                if attn2_locks and mapping.is_cross_attn_key(key):
+                    block_type = mapping.get_attn2_block_type(key)
                     if block_type and block_type in attn2_locks:
                         lock_idx = attn2_locks[block_type]
                         handle = handles.get(lock_idx)
@@ -267,7 +291,7 @@ def merge_hybrid(
                             _tick_progress(reporter, processed=processed, cancel_event=cancel_event, cancel_every=cancel_every)
                             continue
 
-                block_group = get_block_assignment(key)
+                block_group = mapping.get_block_assignment(key)
                 if block_group and block_group in normalized_config:
                     weighted_sum: Optional[torch.Tensor] = None
                     total_weight = 0.0
@@ -317,9 +341,11 @@ def merge_perres(
     progress_cb: Optional[Callable[[str, int], None]] = None,
     cancel_event: Optional[threading.Event] = None,
     cancel_every: int = 1,
+    block_mapping: object = "sdxl",
 ) -> Dict[str, torch.Tensor]:
     """PerRes mode fusion with explicit non-UNet scope control."""
     execution_options = normalize_execution_options(execution)
+    mapping = _resolve_block_mapping(block_mapping)
     print(f"\nStarting PerRes fusion ({execution_options.mode})...")
 
     effective_component_policy = _resolve_component_policy("perres", only_unet, component_policy)
@@ -351,7 +377,12 @@ def merge_perres(
 
         base_handle = handles[backbone_idx]
         base_keys = key_sets[backbone_idx]
-        ordered_keys = build_processing_order(list(base_keys), key_sets.values(), sort_keys=execution_options.sort_keys)
+        ordered_keys = build_processing_order(
+            list(base_keys),
+            key_sets.values(),
+            sort_keys=execution_options.sort_keys,
+            block_mapping=mapping,
+        )
         processed = [0]
 
         with ProgressReporter(len(ordered_keys), "PerRes merge", execution_options, progress_cb=progress_cb) as reporter:
@@ -366,8 +397,8 @@ def merge_perres(
                     _tick_progress(reporter, processed=processed, cancel_event=cancel_event, cancel_every=cancel_every)
                     continue
 
-                if attn2_locks and is_cross_attn_key(key):
-                    block_type = get_attn2_block_type(key)
+                if attn2_locks and mapping.is_cross_attn_key(key):
+                    block_type = mapping.get_attn2_block_type(key)
                     if block_type and block_type in attn2_locks:
                         lock_idx = attn2_locks[block_type]
                         handle = handles.get(lock_idx)
@@ -377,7 +408,7 @@ def merge_perres(
                             _tick_progress(reporter, processed=processed, cancel_event=cancel_event, cancel_every=cancel_every)
                             continue
 
-                block_group = get_block_assignment(key)
+                block_group = mapping.get_block_assignment(key)
                 if block_group and block_group in assignments:
                     model_idx = assignments[block_group]
                     handle = handles.get(model_idx)
@@ -413,9 +444,11 @@ def stream_weighted_merge_from_paths(
     progress_cb: Optional[Callable[[str, int], None]] = None,
     cancel_event: Optional[threading.Event] = None,
     cancel_every: int = 1,
+    block_mapping: object = "sdxl",
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, int]]:
     """Legacy weighted merge with explicit component policy support."""
     execution_options = normalize_execution_options(execution)
+    mapping = _resolve_block_mapping(block_mapping)
     print(f"\nStarting Legacy weighted merge ({execution_options.mode})...")
 
     total_weight = sum(weights)
@@ -452,7 +485,12 @@ def stream_weighted_merge_from_paths(
 
         base_handle = handles[base_idx]
         base_keys = key_sets[base_idx]
-        ordered_keys = build_processing_order(list(base_keys), key_sets, sort_keys=execution_options.sort_keys)
+        ordered_keys = build_processing_order(
+            list(base_keys),
+            key_sets,
+            sort_keys=execution_options.sort_keys,
+            block_mapping=mapping,
+        )
         merged: Dict[str, torch.Tensor] = {}
         processed = [0]
 
@@ -466,7 +504,7 @@ def stream_weighted_merge_from_paths(
                     _update_stat(stats, "excluded_non_unet")
                 return
 
-            group = group_for_key(key) or "other"
+            group = mapping.group_for_key(key) or "other"
             weighted_sum: Optional[torch.Tensor] = None
             active_weight = 0.0
             reference_dtype: Optional[torch.dtype] = None
@@ -482,7 +520,7 @@ def stream_weighted_merge_from_paths(
                         effective_weight *= float(multiplier)
                     except Exception:
                         pass
-                if component == "unet" and crossattn_boosts and is_cross_attn_key(key) and idx < len(crossattn_boosts):
+                if component == "unet" and crossattn_boosts and mapping.is_cross_attn_key(key) and idx < len(crossattn_boosts):
                     boost = crossattn_boosts[idx].get(group, 1.0)
                     try:
                         effective_weight *= float(boost)

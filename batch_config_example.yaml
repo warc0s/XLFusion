@@ -23,6 +23,8 @@ batch_jobs:
   - name: "Artistic_Style_Mix"
     mode: "hybrid"
     description: "Mix artistic style with realistic base"
+    # Optional block mapping registry entry (defaults to "sdxl")
+    block_mapping: "sdxl"
 
     # Real models from the repository
     models:

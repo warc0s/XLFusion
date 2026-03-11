@@ -280,6 +280,7 @@ def generate_batch_config_yaml(
     job_description: str = "Recreated from metadata backup",
     output_name: Optional[str] = None,
     execution: Optional[Dict[str, Any]] = None,
+    block_mapping: Optional[str] = None,
     weights: Optional[List[float]] = None,
     assignments: Optional[Dict[str, Any]] = None,
     hybrid_config: Optional[Dict[str, Any]] = None,
@@ -315,6 +316,8 @@ def generate_batch_config_yaml(
 
     if execution:
         job["execution"] = execution
+    if block_mapping:
+        job["block_mapping"] = str(block_mapping)
     if only_unet is not None:
         job["only_unet"] = only_unet
     if component_policy:

@@ -1,6 +1,6 @@
 # XLFusion
 
-XLFusion is a Python tool for merging SDXL checkpoints with a reproducible workflow across CLI, GUI, and batch execution. As of V2.3, the product code lives in `xlfusion/` and the user runtime lives in `workspace/`. It focuses on reliable validation, per-block control, low-memory execution, reusable presets, recoverable metadata, actionable analysis, checkpoint algebra, and explicit control over non-UNet components.
+XLFusion is a Python tool for merging SDXL checkpoints with a reproducible workflow across CLI, GUI, and batch execution. As of V2.4, the product code lives in `xlfusion/` and the user runtime lives in `workspace/`. It focuses on reliable validation, per-block control, low-memory execution, reusable presets, recoverable metadata, actionable analysis, checkpoint algebra, and explicit control over non-UNet components.
 
 ## What It Does
 
@@ -140,6 +140,7 @@ Batch mode uses the same validator as CLI and GUI. That means:
 - memory, compatibility, and risk warnings are available during validation
 - execution settings can be stored per job for `low-memory` or `standard` runs
 - `only_unet` and `component_policy` are preserved in presets, batch YAML, and metadata recovery
+- `block_mapping` can be set per job (defaults to `sdxl`) to prepare future partitions without rewriting the merge engine
 
 See:
 
@@ -191,7 +192,7 @@ The smoke test generates synthetic models, runs a bounded batch scenario, and re
 
 ## Future Work
 
-`ROADMAP.md` now starts after the already implemented package/runtime reorganization, validation foundation, actionable analysis, checkpoint algebra, explicit component scope, low-memory execution, presets, and metadata recovery. The remaining roadmap focuses on platform evolution and broader regression coverage.
+`ROADMAP.md` now starts after the already implemented package/runtime reorganization, shared validation and preflight, actionable analysis, checkpoint algebra, explicit component scope, low-memory execution, presets, metadata recovery, and the V2.4 platform refactor (shared merge runtime, shared internal types, and a block-mapping registry). The remaining roadmap focuses on broader regression coverage for the existing product.
 
 ## Credits
 

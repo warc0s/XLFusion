@@ -44,14 +44,15 @@ from .cli import (
 )
 from .config import list_safetensors, resolve_app_context
 from .execution import execution_options_to_dict
-from .lora import apply_single_lora_with_report
-from .merge import merge_hybrid, merge_perres, stream_checkpoint_algebra_from_paths, stream_weighted_merge_from_paths
+from .merge import stream_checkpoint_algebra_from_paths
 from .presets import (
     batch_job_to_runtime_state,
     inspect_recovery_source,
     load_single_job_preset,
     save_single_job_preset,
 )
+from .runtime import execute_merge_job
+from .types import MergeJobConfig
 from .validation import export_preflight_plan, format_preflight_plan, validate_merge_request
 from .workflow import save_merge_results
 
@@ -500,6 +501,7 @@ def main() -> int:
         loras_dir=loras_dir,
         only_unet=only_unet,
         component_policy=component_policy,
+        block_mapping=str(loaded_runtime.get("block_mapping", "sdxl")) if loaded_runtime else "sdxl",
     )
 
     if not validation.valid:
@@ -539,6 +541,7 @@ def main() -> int:
                 backbone_idx=validation.normalized["backbone_idx"],
                 output_name=output_base_name,
                 execution=execution_options,
+                block_mapping=str(validation.normalized.get("block_mapping", "sdxl")),
                 job_name=f"Preset_{mode_name}",
                 description="Saved from interactive CLI",
                 weights=validation.normalized.get("weights"),
@@ -559,99 +562,39 @@ def main() -> int:
             print("Merge cancelled before execution.")
             return 0
 
-    model_paths = validation.normalized["model_paths"]
-    model_names = validation.normalized["model_names"]
-    backbone_idx = validation.normalized["backbone_idx"]
-    normalized_loras = validation.normalized["loras"]
-    yaml_kwargs = {
-        "only_unet": validation.normalized.get("only_unet"),
-        "component_policy": validation.normalized.get("component_policy"),
-    }
-    lora_reports = []
-
-    if mode == 0:
-        weights = validation.normalized["weights"]
-        block_weights = validation.normalized["block_multipliers"]
-        crossattn_boosts = validation.normalized["crossattn_boosts"]
-        merged, _legacy_stats = stream_weighted_merge_from_paths(
-            model_paths,
-            weights,
-            backbone_idx,
-            only_unet=bool(validation.normalized.get("only_unet")),
-            component_policy=validation.normalized.get("component_policy"),
-            block_multipliers=block_weights,
-            crossattn_boosts=crossattn_boosts,
-            execution=execution_options,
-        )
-        yaml_kwargs["weights"] = weights
-        if block_weights:
-            yaml_kwargs["block_multipliers"] = block_weights
-        if crossattn_boosts:
-            yaml_kwargs["crossattn_boosts"] = crossattn_boosts
-    elif mode == 1:
-        assignments = validation.normalized["assignments"]
-        attn2_locks = validation.normalized["attn2_locks"]
-        merged = merge_perres(
-            model_paths,
-            assignments,
-            backbone_idx,
-            attn2_locks,
-            only_unet=bool(validation.normalized.get("only_unet")),
-            component_policy=validation.normalized.get("component_policy"),
-            execution=execution_options,
-        )
-        yaml_kwargs["assignments"] = assignments
-        if attn2_locks:
-            yaml_kwargs["attn2_locks"] = attn2_locks
-    else:
-        hybrid_config = validation.normalized["hybrid_config"]
-        attn2_locks = validation.normalized["attn2_locks"]
-        merged = merge_hybrid(
-            model_paths,
-            hybrid_config,
-            backbone_idx,
-            attn2_locks,
-            only_unet=bool(validation.normalized.get("only_unet")),
-            component_policy=validation.normalized.get("component_policy"),
-            execution=execution_options,
-        )
-        yaml_kwargs["hybrid_config"] = hybrid_config
-        if attn2_locks:
-            yaml_kwargs["attn2_locks"] = attn2_locks
-
-    if normalized_loras:
-        yaml_kwargs["loras"] = [
-            {"file": item["file"], "scale": item["scale"]}
-            for item in normalized_loras
-        ]
-        for lora_spec in normalized_loras:
-            report = apply_single_lora_with_report(merged, lora_spec["path"], lora_spec["scale"])
-            lora_reports.append(report.to_dict())
-            print(
-                f"LoRA {lora_spec['file']}: applied {report.applied_pairs}, skipped {report.skipped_pairs}, "
-                f"by component={report.applied_by_component}"
-            )
-
-    output_path, metadata_folder, version = save_merge_results(
-        output_dir,
-        metadata_dir,
-        merged,
-        model_names,
-        mode_name,
-        backbone_idx,
-        yaml_kwargs,
-        model_paths=model_paths,
-        lora_paths=[item["path"] for item in normalized_loras] if normalized_loras else None,
+    normalized = validation.normalized
+    job = MergeJobConfig(
+        mode=mode_name,
+        model_paths=normalized["model_paths"],
+        model_names=normalized["model_names"],
+        backbone_idx=normalized["backbone_idx"],
+        block_mapping=str(normalized.get("block_mapping", "sdxl")),
         output_base_name=output_base_name,
-        execution=execution_options_to_dict(execution_options),
+        weights=normalized.get("weights"),
+        assignments=normalized.get("assignments"),
+        hybrid_config=normalized.get("hybrid_config"),
+        attn2_locks=normalized.get("attn2_locks"),
+        block_multipliers=normalized.get("block_multipliers"),
+        crossattn_boosts=normalized.get("crossattn_boosts"),
+        loras=normalized.get("loras"),
+        only_unet=bool(normalized.get("only_unet")),
+        component_policy=normalized.get("component_policy"),
+        execution=execution_options,
         job_name=f"Interactive_{mode_name}",
         job_description="Interactive CLI run",
-        audit_sections={"lora_application": lora_reports} if lora_reports else None,
     )
+    result = execute_merge_job(output_dir, metadata_dir, job)
 
-    print(f"\nSaved: {output_path.name}")
-    print(f"Version: {version}")
-    print(f"Metadata folder: {metadata_folder.name}/")
+    for report in result.lora_reports:
+        applied_by_component = report.get("applied_by_component", {})
+        print(
+            f"LoRA {report.get('lora_file')}: applied {report.get('applied_pairs')}, "
+            f"skipped {report.get('skipped_pairs')}, by component={applied_by_component}"
+        )
+
+    print(f"\nSaved: {result.output_path.name}")
+    print(f"Version: {result.version}")
+    print(f"Metadata folder: {result.metadata_folder.name}/")
     return 0
 
 

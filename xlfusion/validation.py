@@ -11,13 +11,20 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 import torch
 from safetensors.torch import safe_open
 
-from .blocks import classify_component_key, get_block_assignment
+from .blocks import (
+    SDXL_ATTN_BLOCKS,
+    SDXL_BLOCK_GROUPS,
+    SDXL_LEGACY_GROUPS,
+    classify_component_key,
+    get_block_assignment,
+    get_block_mapping,
+)
 from .memory import check_memory_availability, estimate_memory_requirement, get_available_memory_gb
 from .merge import COMPONENT_POLICY_DEFAULTS, NON_UNET_COMPONENTS
 
-BLOCK_GROUPS = ["down_0_1", "down_2_3", "mid", "up_0_1", "up_2_3"]
-LEGACY_GROUPS = ["down", "mid", "up", "other"]
-ATTN_BLOCKS = ["down", "mid", "up"]
+BLOCK_GROUPS = list(SDXL_BLOCK_GROUPS)
+LEGACY_GROUPS = list(SDXL_LEGACY_GROUPS)
+ATTN_BLOCKS = list(SDXL_ATTN_BLOCKS)
 LEGACY_NON_UNET_ACTIONS = {"exclude", "merge", "backbone"}
 BACKBONE_ONLY_ACTIONS = {"exclude", "backbone"}
 
@@ -169,6 +176,8 @@ def _validate_legacy_maps(
     items: Optional[Sequence[Dict[str, Any]]],
     field: str,
     model_count: int,
+    *,
+    allowed_groups: Sequence[str] = LEGACY_GROUPS,
 ) -> Optional[List[Dict[str, float]]]:
     if items is None:
         return None
@@ -187,7 +196,7 @@ def _validate_legacy_maps(
             continue
         per_model: Dict[str, float] = {}
         for key, value in mapping.items():
-            if key not in LEGACY_GROUPS:
+            if key not in allowed_groups:
                 _error(result, f"{field}[{model_idx}].{key}", f"unsupported block group '{key}'")
                 continue
             try:
@@ -302,6 +311,7 @@ def _collect_risk_alerts(
     mode: str,
     normalized: Dict[str, Any],
     compatibility_warnings: Sequence[str],
+    block_groups: Sequence[str] = BLOCK_GROUPS,
 ) -> List[str]:
     alerts: List[str] = []
 
@@ -328,7 +338,7 @@ def _collect_risk_alerts(
             alerts.append("One model dominates the legacy weights; the output may be too close to a single source model.")
     elif mode == "perres":
         assignments = normalized.get("assignments") or {}
-        if len(set(assignments.values())) == 1 and len(assignments) == len(BLOCK_GROUPS):
+        if len(set(assignments.values())) == 1 and len(assignments) == len(block_groups):
             alerts.append("All PerRes blocks are assigned to the same model; block mode adds no diversity in this configuration.")
     elif mode == "hybrid":
         hybrid_config = normalized.get("hybrid_config") or {}
@@ -367,8 +377,14 @@ def validate_merge_request(
     loras_dir: Optional[Path] = None,
     only_unet: Optional[Any] = None,
     component_policy: Optional[Dict[str, Any]] = None,
+    block_mapping: str = "sdxl",
 ) -> ValidationResult:
-    result = ValidationResult(valid=True, normalized={"mode": mode})
+    mapping = get_block_mapping(block_mapping)
+    block_groups = list(mapping.block_groups)
+    attn_blocks = set(mapping.attn_blocks)
+    legacy_groups = list(mapping.legacy_groups)
+
+    result = ValidationResult(valid=True, normalized={"mode": mode, "block_mapping": mapping.name})
     normalized_paths = _validate_path_list(result, model_paths)
     model_names = [path.name for path in normalized_paths]
     model_count = len(normalized_paths)
@@ -430,15 +446,27 @@ def validate_merge_request(
                 _warning(result, "weights", f"weights sum to {total_weight:.3f}; the merge will normalize them")
 
         result.normalized["weights"] = normalized_weights
-        result.normalized["block_multipliers"] = _validate_legacy_maps(result, block_multipliers, "block_multipliers", model_count)
-        result.normalized["crossattn_boosts"] = _validate_legacy_maps(result, crossattn_boosts, "crossattn_boosts", model_count)
+        result.normalized["block_multipliers"] = _validate_legacy_maps(
+            result,
+            block_multipliers,
+            "block_multipliers",
+            model_count,
+            allowed_groups=legacy_groups,
+        )
+        result.normalized["crossattn_boosts"] = _validate_legacy_maps(
+            result,
+            crossattn_boosts,
+            "crossattn_boosts",
+            model_count,
+            allowed_groups=legacy_groups,
+        )
 
     elif mode == "perres":
         normalized_assignments: Dict[str, int] = {}
         if not isinstance(assignments, dict):
             _error(result, "assignments", "perres mode requires an assignments mapping")
         else:
-            for block in BLOCK_GROUPS:
+            for block in block_groups:
                 if block not in assignments:
                     _error(result, f"assignments.{block}", "missing required assignment")
                     continue
@@ -446,7 +474,7 @@ def validate_merge_request(
                 if idx is not None:
                     normalized_assignments[block] = idx
         for block in assignments or {}:
-            if block not in BLOCK_GROUPS:
+            if block not in block_groups:
                 _warning(result, f"assignments.{block}", "unknown block will be ignored")
         result.normalized["assignments"] = normalized_assignments
 
@@ -455,7 +483,7 @@ def validate_merge_request(
         if not isinstance(hybrid_config, dict):
             _error(result, "hybrid_config", "hybrid mode requires a hybrid_config mapping")
         else:
-            for block in BLOCK_GROUPS:
+            for block in block_groups:
                 weights_by_model = hybrid_config.get(block) if hybrid_config else None
                 if not isinstance(weights_by_model, dict):
                     _error(result, f"hybrid_config.{block}", "missing required block mapping")
@@ -496,7 +524,7 @@ def validate_merge_request(
             _error(result, "attn2_locks", "must be a mapping of down/mid/up to model indices")
         else:
             for block_type, value in attn2_locks.items():
-                if block_type not in ATTN_BLOCKS:
+                if block_type not in attn_blocks:
                     _error(result, f"attn2_locks.{block_type}", "unsupported lock group")
                     continue
                 idx = _validate_index(result, value, f"attn2_locks.{block_type}", model_count)
@@ -515,7 +543,7 @@ def validate_merge_request(
         assignments_map = result.normalized.get("assignments", {})
         selected_indices = sorted(set(assignments_map.values()) | set(normalized_locks.values()) | {backbone_idx})
         loaded_indices = selected_indices[:]
-        affected_blocks = [block for block in BLOCK_GROUPS if block in assignments_map]
+        affected_blocks = [block for block in block_groups if block in assignments_map]
     else:
         hybrid_map = result.normalized.get("hybrid_config", {})
         selected = {backbone_idx}
@@ -524,7 +552,7 @@ def validate_merge_request(
         selected.update(normalized_locks.values())
         selected_indices = sorted(selected)
         loaded_indices = selected_indices[:]
-        affected_blocks = [block for block in BLOCK_GROUPS if block in hybrid_map]
+        affected_blocks = [block for block in block_groups if block in hybrid_map]
 
     try:
         compatibility_warnings = _collect_structure_compatibility(normalized_paths)
@@ -539,6 +567,7 @@ def validate_merge_request(
         mode=mode,
         normalized=result.normalized,
         compatibility_warnings=compatibility_warnings,
+        block_groups=block_groups,
     )
     for alert in risk_alerts:
         _warning(result, "risk", alert)

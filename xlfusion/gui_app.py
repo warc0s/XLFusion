@@ -9,10 +9,11 @@ from typing import Dict, List, Optional
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 
+from .blocks import SDXL_ATTN_BLOCKS, SDXL_BLOCK_GROUPS
 from .config import AppContext, list_safetensors
 from .execution import execution_options_to_dict
-from .lora import apply_single_lora_with_report
-from .merge import merge_hybrid, merge_perres, stream_weighted_merge_from_paths
+from .runtime import execute_merge_job
+from .types import MergeJobConfig
 from .presets import (
     batch_job_to_runtime_state,
     inspect_recovery_source,
@@ -20,11 +21,10 @@ from .presets import (
     save_single_job_preset,
 )
 from .validation import export_preflight_plan, format_preflight_plan, validate_merge_request
-from .workflow import save_merge_results
 
-BLOCK_GROUPS = ["down_0_1", "down_2_3", "mid", "up_0_1", "up_2_3"]
-ATTN_BLOCKS = ["down", "mid", "up"]
-LEGACY_BLOCKS = ["down", "mid", "up"]
+BLOCK_GROUPS = list(SDXL_BLOCK_GROUPS)
+ATTN_BLOCKS = list(SDXL_ATTN_BLOCKS)
+LEGACY_BLOCKS = list(SDXL_ATTN_BLOCKS)
 MODEL_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
 
 
@@ -1191,6 +1191,7 @@ class FusionGUI:
         mode: str = self.state.get("mode", "legacy")
         model_paths: List[Path] = list(self.state.get("model_paths", []))
         only_unet, component_policy = self._get_component_scope_config(mode)
+        block_mapping = str(self.state.get("block_mapping", "sdxl"))
 
         if mode == "legacy":
             config = self.legacy_panel.get_config()
@@ -1206,6 +1207,7 @@ class FusionGUI:
                 loras_dir=self.loras_dir,
                 only_unet=only_unet,
                 component_policy=component_policy,
+                block_mapping=block_mapping,
             )
 
         if mode == "perres":
@@ -1223,6 +1225,7 @@ class FusionGUI:
                 loras_dir=self.loras_dir,
                 only_unet=only_unet,
                 component_policy=component_policy,
+                block_mapping=block_mapping,
             )
 
         config = self.hybrid_panel.get_config()
@@ -1237,6 +1240,7 @@ class FusionGUI:
             loras_dir=self.loras_dir,
             only_unet=only_unet,
             component_policy=component_policy,
+            block_mapping=block_mapping,
         )
 
     def _set_component_scope_for_mode(self, mode: str, config: Optional[Dict[str, object]] = None) -> None:
@@ -1298,6 +1302,7 @@ class FusionGUI:
         self.state["model_indices"] = selected_ids
         self.state["model_paths"] = [self.model_paths[i] for i in selected_ids]
         self.state["model_names"] = model_names
+        self.state["block_mapping"] = str(runtime.get("block_mapping", "sdxl"))
 
         mode = str(runtime.get("mode", "legacy"))
         self.mode_var.set(mode)
@@ -1379,6 +1384,7 @@ class FusionGUI:
                 model_names=list(validation.normalized.get("model_names", [])),
                 backbone_idx=int(validation.normalized.get("backbone_idx", 0)),
                 output_name=self.output_name_var.get().strip() or None,
+                block_mapping=str(validation.normalized.get("block_mapping", "sdxl")),
                 execution=execution,
                 job_name=f"GUI_{self.state.get('mode', 'legacy')}",
                 description="Saved from XLFusion GUI",
@@ -1624,7 +1630,6 @@ class FusionGUI:
             output_name = self.output_name_var.get().strip() or None
             only_unet = bool(validation.normalized.get("only_unet"))
             component_policy = validation.normalized.get("component_policy")
-            lora_reports = []
 
             if len(model_paths) < 2:
                 raise RuntimeError("At least two models are required to merge.")
@@ -1637,131 +1642,46 @@ class FusionGUI:
                 elif kind == "tick":
                     self.log_queue.put(("progress_tick", value))
 
-            if mode == "legacy":
-                weights = validation.normalized.get("weights", [])
-                backbone_idx = int(validation.normalized.get("backbone_idx", 0))
-                block_multipliers = validation.normalized.get("block_multipliers")
-                cross_boosts = validation.normalized.get("crossattn_boosts")
-                merged, _stats = stream_weighted_merge_from_paths(
-                    model_paths,
-                    weights,
-                    backbone_idx,
-                    only_unet=only_unet,
-                    component_policy=component_policy,
-                    block_multipliers=block_multipliers,
-                    crossattn_boosts=cross_boosts,
-                    execution=execution,
-                    progress_cb=on_progress,
-                    cancel_event=self.cancel_event,
-                )
-                for lora_spec in validation.normalized.get("loras", []):
-                    report = apply_single_lora_with_report(merged, lora_spec["path"], lora_spec["scale"])
-                    lora_reports.append(report.to_dict())
-                    self.log_queue.put(("info", f"LoRA {lora_spec['file']}: applied {report.applied_pairs}, skipped {report.skipped_pairs}"))
-
-                yaml_kwargs: Dict[str, object] = {
-                    "weights": weights,
-                    "only_unet": only_unet,
-                    "component_policy": component_policy,
-                }
-                if block_multipliers:
-                    yaml_kwargs["block_multipliers"] = block_multipliers
-                if cross_boosts:
-                    yaml_kwargs["crossattn_boosts"] = cross_boosts
-                lora_yaml = []
-                for lora_spec in validation.normalized.get("loras", []):
-                    lora_yaml.append({"file": lora_spec["file"], "scale": lora_spec["scale"]})
-                if lora_yaml:
-                    yaml_kwargs["loras"] = lora_yaml
-
-            elif mode == "perres":
-                assignments = validation.normalized.get("assignments", {})
-                attn2 = validation.normalized.get("attn2_locks")
-                backbone_idx = int(validation.normalized.get("backbone_idx", 0))
-                merged = merge_perres(
-                    model_paths,
-                    assignments,
-                    backbone_idx,
-                    attn2,
-                    only_unet=only_unet,
-                    component_policy=component_policy,
-                    execution=execution,
-                    progress_cb=on_progress,
-                    cancel_event=self.cancel_event,
-                )
-
-                for lora_spec in validation.normalized.get("loras", []):
-                    report = apply_single_lora_with_report(merged, lora_spec["path"], lora_spec["scale"])
-                    lora_reports.append(report.to_dict())
-                    self.log_queue.put(("info", f"LoRA {lora_spec['file']}: applied {report.applied_pairs}, skipped {report.skipped_pairs}"))
-
-                yaml_kwargs = {
-                    "assignments": assignments,
-                    "only_unet": only_unet,
-                    "component_policy": component_policy,
-                }
-                if attn2:
-                    yaml_kwargs["attn2_locks"] = attn2
-                lora_yaml = []
-                for lora_spec in validation.normalized.get("loras", []):
-                    lora_yaml.append({"file": lora_spec["file"], "scale": lora_spec["scale"]})
-                if lora_yaml:
-                    yaml_kwargs["loras"] = lora_yaml
-
-            else:
-                hybrid_cfg = validation.normalized.get("hybrid_config", {})
-                attn2 = validation.normalized.get("attn2_locks")
-                backbone_idx = int(validation.normalized.get("backbone_idx", 0))
-                merged = merge_hybrid(
-                    model_paths,
-                    hybrid_cfg,
-                    backbone_idx,
-                    attn2,
-                    only_unet=only_unet,
-                    component_policy=component_policy,
-                    execution=execution,
-                    progress_cb=on_progress,
-                    cancel_event=self.cancel_event,
-                )
-
-                for lora_spec in validation.normalized.get("loras", []):
-                    report = apply_single_lora_with_report(merged, lora_spec["path"], lora_spec["scale"])
-                    lora_reports.append(report.to_dict())
-                    self.log_queue.put(("info", f"LoRA {lora_spec['file']}: applied {report.applied_pairs}, skipped {report.skipped_pairs}"))
-
-                yaml_kwargs = {
-                    "hybrid_config": hybrid_cfg,
-                    "only_unet": only_unet,
-                    "component_policy": component_policy,
-                }
-                if attn2:
-                    yaml_kwargs["attn2_locks"] = attn2
-                lora_yaml = []
-                for lora_spec in validation.normalized.get("loras", []):
-                    lora_yaml.append({"file": lora_spec["file"], "scale": lora_spec["scale"]})
-                if lora_yaml:
-                    yaml_kwargs["loras"] = lora_yaml
-
-            lora_paths = [item["path"] for item in validation.normalized.get("loras", [])] or None
-            output_path, metadata_folder, version = save_merge_results(
-                self.output_dir,
-                self.metadata_dir,
-                merged,
-                model_names,
-                mode,
-                backbone_idx,
-                yaml_kwargs,
+            normalized = validation.normalized
+            merge_job = MergeJobConfig(
+                mode=mode,
                 model_paths=model_paths,
-                lora_paths=lora_paths,
+                model_names=model_names,
+                backbone_idx=int(normalized.get("backbone_idx", 0)),
+                block_mapping=str(normalized.get("block_mapping", "sdxl")),
                 output_base_name=output_name,
-                execution=execution_options_to_dict(execution),
+                weights=normalized.get("weights"),
+                assignments=normalized.get("assignments"),
+                hybrid_config=normalized.get("hybrid_config"),
+                attn2_locks=normalized.get("attn2_locks"),
+                block_multipliers=normalized.get("block_multipliers"),
+                crossattn_boosts=normalized.get("crossattn_boosts"),
+                loras=normalized.get("loras"),
+                only_unet=only_unet,
+                component_policy=component_policy,
+                execution=execution,
                 job_name=f"GUI_{mode}",
                 job_description="Interactive GUI run",
-                audit_sections={"lora_application": lora_reports} if lora_reports else None,
             )
 
-            self.log_queue.put(("success", f"Merge completed: {output_path.name} (V{version})"))
-            self.log_queue.put(("info", f"Metadata saved to {metadata_folder.name}"))
+            result = execute_merge_job(
+                self.output_dir,
+                self.metadata_dir,
+                merge_job,
+                progress_cb=on_progress,
+                cancel_event=self.cancel_event,
+            )
+
+            for report in result.lora_reports:
+                self.log_queue.put(
+                    (
+                        "info",
+                        f"LoRA {report.get('lora_file')}: applied {report.get('applied_pairs')}, skipped {report.get('skipped_pairs')}",
+                    )
+                )
+
+            self.log_queue.put(("success", f"Merge completed: {result.output_path.name} (V{result.version})"))
+            self.log_queue.put(("info", f"Metadata saved to {result.metadata_folder.name}"))
         except Exception as exc:  # pragma: no cover
             self.log_queue.put(("error", str(exc)))
         finally:

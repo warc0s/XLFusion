@@ -458,7 +458,7 @@ class RecommendationEngine:
 def generate_analysis_report(results: Dict[str, Any]) -> str:
     lines = [
         "=" * 80,
-        "XLFusion V2.3 - Actionable Analysis Report",
+        "XLFusion V2.4 - Actionable Analysis Report",
         "=" * 80,
         "",
     ]
