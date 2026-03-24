@@ -10,6 +10,7 @@ import torch
 
 from .config import generate_batch_config_yaml, load_config, next_version_path
 from .memory import save_state
+from .version import __version__
 
 
 def _build_metadata_header(mode: str, model_names: Iterable[str]) -> str:
@@ -83,6 +84,7 @@ def save_merge_results(
         "models": ",".join(model_names),
         "mode": mode,
         "tool": config["app"]["tool_name"],
+        "tool_version": __version__,
         "timestamp": str(time.time()),
     }
     if extra_metadata:
@@ -98,6 +100,7 @@ def save_merge_results(
         fh.write(_build_metadata_header(mode, model_names))
         fh.write(f"Output: {output_path.name}\n")
         fh.write(f"Backbone: {model_names[backbone_idx]} (idx {backbone_idx})\n")
+        fh.write(f"Tool version: {meta.get('tool')} v{meta.get('tool_version')}\n")
         fh.write(f"Timestamp: {meta['timestamp']}\n")
         try:
             fh.write(f"Torch: {torch.__version__}\n")

@@ -161,18 +161,19 @@ cython_debug/
 # Claude Code specific
 .claude/
 
-# Model and output directories (ignore all contents except placeholders)
+# Runtime workspace (ignore all contents except placeholders)
 # This prevents committing large/binary artifacts and local results.
-models/**
-loras/**
-output/**
-metadata/**
+workspace/models/**
+workspace/loras/**
+workspace/output/**
+workspace/metadata/**
+workspace/presets/**
 
 # Keep placeholder files
-!models/insert_models_here.txt
-!loras/insert_loras_here.txt
-!output/merged_models_output_here.txt
-!metadata/audit_logs_here.txt
+!workspace/models/insert_models_here.txt
+!workspace/loras/insert_loras_here.txt
+!workspace/output/merged_models_output_here.txt
+!workspace/metadata/audit_logs_here.txt
 
 # If you still want to ignore only safetensors anywhere as a fallback
 *.safetensors
@@ -200,6 +201,9 @@ opencode.json
 
 # Local agent metadata/config
 AGENTS.md
+
+# Batch logs
+batch_log.txt
 
 # Windows alternate data stream sidecars
 *:Zone.Identifier

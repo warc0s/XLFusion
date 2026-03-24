@@ -8,6 +8,7 @@ from .presets import inspect_recovery_source, load_single_job_preset, save_singl
 from .runtime import execute_merge_job
 from .types import MergeJobConfig, MergeJobResult
 from .validation import export_preflight_plan, format_preflight_plan, validate_merge_request
+from .version import __version__
 from .workflow import save_merge_results
 
 __all__ = [
@@ -35,4 +36,5 @@ __all__ = [
     "stream_checkpoint_algebra_from_paths",
     "stream_weighted_merge_from_paths",
     "validate_merge_request",
+    "__version__",
 ]

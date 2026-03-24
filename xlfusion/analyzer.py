@@ -11,6 +11,7 @@ import torch
 
 from .blocks import classify_component_key, classify_submodule_key, get_block_assignment
 from .memory import load_state
+from .version import __version__
 
 REGION_ALIASES = {
     "down_0_1": "structure",
@@ -458,7 +459,7 @@ class RecommendationEngine:
 def generate_analysis_report(results: Dict[str, Any]) -> str:
     lines = [
         "=" * 80,
-        "XLFusion V2.4 - Actionable Analysis Report",
+        f"XLFusion v{__version__} - Actionable Analysis Report",
         "=" * 80,
         "",
     ]
