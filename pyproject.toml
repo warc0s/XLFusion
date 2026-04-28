@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xlfusion"
+version = "2.4.0"
+description = "Reproducible SDXL checkpoint merging across CLI, GUI, and batch workflows."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Marcos Garest" }
+]
+dependencies = [
+  "torch>=2.0.0",
+  "safetensors>=0.3.0",
+  "PyYAML>=6.0",
+  "numpy>=1.24.0",
+  "tqdm>=4.65.0",
+  "psutil>=5.9.0",
+  "packaging>=21.0",
+]
+
+[project.scripts]
+xlfusion = "xlfusion.app:main"
+xlfusion-gui = "xlfusion.gui_app:main"
+
+[tool.setuptools]
+packages = ["xlfusion"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

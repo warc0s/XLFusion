@@ -1,4 +1,4 @@
-"""Minimal public package surface for XLFusion."""
+"""Minimal package surface for XLFusion."""
 
 from .batch_processor import BatchProcessor, BatchValidator, load_batch_config
 from .config import AppContext, ensure_dirs, list_safetensors, load_config, resolve_app_context

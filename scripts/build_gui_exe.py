@@ -26,7 +26,7 @@ def build(name: str, onefile: bool) -> None:
         raise FileNotFoundError("gui_app.py not found at the project root")
 
     assets = [
-        _format_add_data(root / "config.yaml", "."),
+        _format_add_data(root / "config.yaml.example", "."),
         _format_add_data(root / "batch_config_example.yaml", "."),
     ]
 

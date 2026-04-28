@@ -201,6 +201,11 @@ opencode.json
 
 # Local agent metadata/config
 AGENTS.md
+.codex
+.codex/
+
+# Local configuration override; publish config.yaml.example instead.
+config.yaml
 
 # Batch logs
 batch_log.txt

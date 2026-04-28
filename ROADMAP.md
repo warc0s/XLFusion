@@ -1,66 +1,39 @@
 # XLFusion Roadmap
 
-Current status: `main` already covers the package/runtime reorganization, shared validation and preflight, actionable analysis, checkpoint algebra, explicit component scope, LoRA audit reporting, reproducible metadata, CLI/GUI/batch execution, presets, metadata recovery, and the V2.4 platform work (shared merge runtime, shared types, and a block-mapping registry for future partitions). This roadmap only tracks future improvements that still add real value to the product.
+Current status: `main` already covers package/runtime reorganization, shared validation and preflight, actionable analysis, checkpoint algebra, explicit component scope, LoRA audit reporting, reproducible metadata, CLI/GUI/batch execution, presets, metadata recovery, V2.4 shared runtime/types/block-mapping work, and V2.5 regression coverage.
 
-## Principles For Upcoming Versions
+This roadmap only tracks future improvements that still add real value to the current product.
 
-- Prioritize reliability before adding more merge modes.
-- Improve memory usage and speed without sacrificing reproducibility.
-- Keep the experience aligned across CLI, GUI, and batch.
-- Turn analysis into something that actively helps users make better merge decisions.
+## Completed: V2.5 Regression Coverage
 
-## V2.5 Full Coverage Of The Current Product
+V2.5 focused on protecting existing behavior with fast synthetic tests instead of adding new merge modes.
 
-Goal: build a broad and useful test base that covers the code already in place so regressions are detected much earlier on every change.
+Completed outcomes:
+- broader unittest coverage for blocks, execution, memory, batch runner, app entrypoints, analysis, algebra, metadata recovery, and LoRA flows
+- regression tests for historical failure cases and stable contracts
+- synthetic safetensors fixtures so validation does not require real checkpoints
+- a smoke test path that generates bounded test models and cleans temporary outputs
 
-Status: implemented on `main` (2026-03-11) by expanding the unittest suite with additional contract coverage (blocks/execution/memory/batch runner) and a metadata recovery roundtrip test.
+## Next: V2.6 Repository Hygiene And Maintainability
 
-### 1. Cover Every Relevant Module In The Current Product
+Goal: make the repository easier to install, inspect, package, and maintain without changing merge behavior.
 
-- Review `xlfusion/` module by module and add tests wherever coverage is currently missing or clearly insufficient.
-- Prioritize observable behavior and public contracts before fragile implementation details.
-- Keep the focus on the current product, not on future features.
-
-Acceptance criteria:
-- The main areas of the product have automated tests covering normal behavior, expected failures, and useful edge cases.
-
-### 2. Harden CLI, Batch, Workflow, Metadata, And Recovery
-
-- Add dedicated tests for the flows most likely to break compatibility: configuration loading, validation, execution, persistence, presets, and metadata recovery.
-- Verify that the same configuration produces coherent artifacts in CLI, batch, and GUI when they share the same common layer.
-- Ensure output name handling, metadata, recreated batch YAML, and execution options remain stable through refactors.
+Priorities:
+- keep local-only files out of git, especially `config.yaml`, agent metadata, caches, logs, and generated checkpoints
+- maintain `config.yaml.example` as the distributable configuration template
+- continue extracting large UI/orchestration modules into smaller internal modules without changing CLI, GUI, batch, metadata, or preset contracts
+- keep package metadata and entrypoints aligned with the existing `python XLFusion.py`, `python -m xlfusion`, and GUI workflows
+- add focused regression tests whenever a cleanup changes module boundaries
 
 Acceptance criteria:
-- A change in configuration, workflow, or persistence breaks focused tests before it reaches the user.
+- fresh clones have no local machine or agent artifacts
+- the full unittest suite stays fast and passes without real SDXL checkpoints
+- package entrypoints and direct script entrypoints remain equivalent
+- README, roadmap, and build scripts describe the current product rather than legacy state
 
-### 3. Compare Execution Paths To Avoid Silent Divergence
+## Later Reliability Ideas
 
-- Add synthetic tests that compare results between `standard` and `low-memory`, across modes where appropriate, and between direct execution and metadata-based reconstruction.
-- Include numerical equivalence checks within tolerance and output-structure checks.
-- Define and verify minimum contracts for progress, cancellation, and warnings.
-
-Acceptance criteria:
-- If two execution paths that should behave the same start diverging, tests detect it immediately.
-
-### 4. Real Coverage For Errors And Historical Regressions
-
-- Turn previously found bugs into permanent tests before or alongside any fix.
-- Cover shape errors, missing models, incompatible LoRAs, invalid YAML, incomplete presets, and partial metadata.
-- Avoid having a suite made only of happy-path tests.
-
-Acceptance criteria:
-- Known or plausible failures have automated regression coverage and do not rely on team memory to avoid repeating them.
-
-### 5. A Reliable Suite For Day-To-Day Development
-
-- Keep the suite reasonably fast with small synthetic models so it can be run frequently.
-- Split fast contract tests from heavier integration tests when needed, without losing useful coverage.
-- Clearly document which commands validate the product and which ones are required before accepting a functional change.
-
-Acceptance criteria:
-- After any relevant change, there is a clear set of tests that provides real confidence about the state of the product.
-
-## Recommended Priorities
-
-1. Keep V2.5 coverage healthy (add regressions as bugs are found)
-2. Define V2.6+ reliability goals
+- split fast contract tests from heavier smoke/integration tests if the suite grows
+- add optional lint/typecheck commands once the codebase is ready to enforce them consistently
+- replace direct merge-engine `print()` calls with an injectable reporter/logger while preserving CLI output
+- define a small compatibility checklist for future block mappings beyond SDXL

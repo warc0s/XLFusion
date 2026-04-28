@@ -41,6 +41,7 @@ Main dependencies: `torch`, `safetensors`, `PyYAML`, `numpy`, `tqdm`, `psutil`.
 
 - `config.yaml` is optional.
 - `config.yaml.example` is the distributable template.
+- `config.yaml` is a local override and is intentionally ignored by git.
 - If `config.yaml` is missing, invalid, or partially defined, XLFusion falls back to safe built-in defaults.
 
 ## Project Layout
@@ -49,8 +50,8 @@ Main dependencies: `torch`, `safetensors`, `PyYAML`, `numpy`, `tqdm`, `psutil`.
 XLFusion/
 ├── XLFusion.py
 ├── gui_app.py
-├── config.yaml
 ├── config.yaml.example
+├── pyproject.toml
 ├── xlfusion/
 ├── workspace/
 │   ├── models/
@@ -192,9 +193,9 @@ The unittest suite is intended to stay fast and run on every change. The smoke t
 
 ## Future Work
 
-`ROADMAP.md` tracks future improvements after the already implemented package/runtime reorganization, shared validation and preflight, actionable analysis, checkpoint algebra, explicit component scope, low-memory execution, presets, metadata recovery, and the V2.4 platform refactor (shared merge runtime, shared internal types, and a block-mapping registry).
+`ROADMAP.md` tracks future improvements after the already implemented package/runtime reorganization, shared validation and preflight, actionable analysis, checkpoint algebra, explicit component scope, low-memory execution, presets, metadata recovery, and the V2.5 regression coverage work.
 
-The current roadmap focus (V2.5) is stability via broad automated regression coverage of the existing product.
+The current roadmap focus is V2.6 repository hygiene and maintainability.
 
 ## Credits
 
