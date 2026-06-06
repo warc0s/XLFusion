@@ -1,0 +1,3 @@
+Save local XLFusion preset YAML files here.
+
+This directory is ignored except for this placeholder. Do not commit private presets that reveal local paths or proprietary model names.
