@@ -4,12 +4,33 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xlfusion"
-version = "2.4.0"
-description = "Reproducible SDXL checkpoint merging across CLI, GUI, and batch workflows."
+version = "2.4.1"
+description = "Reproducible SDXL checkpoint merging toolkit"
 readme = "README.md"
 requires-python = ">=3.10"
+license = { file = "LICENSE" }
 authors = [
-  { name = "Marcos Garest" }
+  { name = "warc0s" }
+]
+keywords = [
+  "sdxl",
+  "stable-diffusion",
+  "checkpoint-merging",
+  "safetensors",
+  "diffusion-models",
+  "python",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Environment :: X11 Applications :: Qt",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
   "torch>=2.0.0",
@@ -24,6 +45,12 @@ dependencies = [
 [project.scripts]
 xlfusion = "xlfusion.app:main"
 xlfusion-gui = "xlfusion.gui_app:main"
+
+[project.urls]
+Homepage = "https://github.com/warc0s/XLFusion"
+Repository = "https://github.com/warc0s/XLFusion"
+Issues = "https://github.com/warc0s/XLFusion/issues"
+Changelog = "https://github.com/warc0s/XLFusion/blob/main/CHANGELOG.md"
 
 [tool.setuptools]
 packages = ["xlfusion"]

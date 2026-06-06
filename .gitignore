@@ -174,9 +174,14 @@ workspace/presets/**
 !workspace/loras/insert_loras_here.txt
 !workspace/output/merged_models_output_here.txt
 !workspace/metadata/audit_logs_here.txt
+!workspace/presets/presets_go_here.txt
 
-# If you still want to ignore only safetensors anywhere as a fallback
+# Model and generated artifact fallbacks
 *.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
 
 # Temporary files
 *.tmp

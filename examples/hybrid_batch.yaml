@@ -1,0 +1,42 @@
+# Hybrid XLFusion batch example.
+#
+# Place these checkpoint files in workspace/models/ before running:
+# - base_model_a.safetensors
+# - base_model_b.safetensors
+#
+# Validate without merging:
+# python XLFusion.py --batch examples/hybrid_batch.yaml --validate-only
+
+global_settings:
+  output_base: "example_output"
+  continue_on_error: false
+  max_parallel: 1
+  log_level: "INFO"
+
+batch_jobs:
+  - name: "hybrid_style_transfer"
+    mode: "hybrid"
+    description: "Preserve composition in down blocks and move style into up blocks."
+    block_mapping: "sdxl"
+    models:
+      - "base_model_a.safetensors"
+      - "base_model_b.safetensors"
+    backbone: 0
+    hybrid_config:
+      down_0_1: {0: 0.80, 1: 0.20}
+      down_2_3: {0: 0.70, 1: 0.30}
+      mid: {0: 0.55, 1: 0.45}
+      up_0_1: {0: 0.30, 1: 0.70}
+      up_2_3: {0: 0.20, 1: 0.80}
+    attn2_locks:
+      down: 0
+      mid: 0
+      up: 1
+    output_name: "HybridStyleTransfer"
+    execution:
+      mode: "low-memory"
+      dtype: "float32"
+    component_policy:
+      vae: "backbone"
+      text_encoder: "backbone"
+      other: "backbone"

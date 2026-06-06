@@ -1,8 +1,21 @@
 # XLFusion Roadmap
 
-Current status: `main` already covers package/runtime reorganization, shared validation and preflight, actionable analysis, checkpoint algebra, explicit component scope, LoRA audit reporting, reproducible metadata, CLI/GUI/batch execution, presets, metadata recovery, V2.4 shared runtime/types/block-mapping work, and V2.5 regression coverage.
+Current status: `main` covers package/runtime reorganization, shared validation and preflight, actionable analysis, checkpoint algebra, explicit component scope, LoRA audit reporting, reproducible metadata, CLI/GUI/batch execution, presets, metadata recovery, V2.4 shared runtime/types/block-mapping work, V2.5 regression coverage, and V2.4.1 OSS readiness work.
 
 This roadmap only tracks future improvements that still add real value to the current product.
+
+## Completed: V2.4.1 OSS Readiness
+
+V2.4.1 focused on making the repository installable, reviewable, and maintainable as an early-stage public OSS project without changing merge behavior.
+
+Completed outcomes:
+- MIT license and package license metadata
+- editable install path with `python -m pip install -e .`
+- console entrypoint through `xlfusion`
+- GitHub Actions CI for Python 3.10 and 3.11
+- contribution, security, code of conduct, maintainer, changelog, release notes, issue template, and PR template documentation
+- OSS-safe examples for batch, hybrid, algebra, and metadata recovery workflows
+- workspace ignore rules and placeholders for local runtime artifacts
 
 ## Completed: V2.5 Regression Coverage
 
@@ -14,15 +27,16 @@ Completed outcomes:
 - synthetic safetensors fixtures so validation does not require real checkpoints
 - a smoke test path that generates bounded test models and cleans temporary outputs
 
-## Next: V2.6 Repository Hygiene And Maintainability
+## Next: V2.6 Internal Maintainability
 
-Goal: make the repository easier to install, inspect, package, and maintain without changing merge behavior.
+Goal: continue reducing implementation risk without changing merge behavior.
 
 Priorities:
-- keep local-only files out of git, especially `config.yaml`, agent metadata, caches, logs, and generated checkpoints
-- maintain `config.yaml.example` as the distributable configuration template
 - continue extracting large UI/orchestration modules into smaller internal modules without changing CLI, GUI, batch, metadata, or preset contracts
-- keep package metadata and entrypoints aligned with the existing `python XLFusion.py`, `python -m xlfusion`, and GUI workflows
+- keep package metadata and entrypoints aligned with `python XLFusion.py`, `python -m xlfusion`, `xlfusion`, and GUI workflows
+- add a small release validation script once the manual release checklist has settled
+- keep `config.yaml.example`, examples, and metadata recovery docs aligned with current behavior
+- improve maintainer diagnostics for CI failures and dependency installation issues
 - add focused regression tests whenever a cleanup changes module boundaries
 
 Acceptance criteria:

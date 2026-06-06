@@ -1,0 +1,93 @@
+name: Bug report
+description: Report a reproducible XLFusion problem
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not upload proprietary checkpoints, LoRAs, generated outputs, or large binary files. Use generic model names or partial hashes only.
+  - type: input
+    id: xlfusion-version
+    attributes:
+      label: XLFusion version
+      description: Run `python -m xlfusion --help` from the checkout or installed environment if needed.
+      placeholder: "2.4.1"
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "Python 3.10.14"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Ubuntu 24.04, Windows 11, macOS 15"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode used
+      multiple: true
+      options:
+        - CLI
+        - GUI
+        - batch
+        - analysis
+        - algebra
+    validations:
+      required: true
+  - type: textarea
+    id: command-or-yaml
+    attributes:
+      label: Command or YAML used
+      description: Remove private paths, account names, and proprietary model names if needed.
+      render: shell
+      placeholder: |
+        python XLFusion.py --batch examples/minimal_batch.yaml --validate-only
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste only the relevant traceback or log excerpt. Remove private paths and tokens.
+      render: text
+  - type: textarea
+    id: checkpoint-info
+    attributes:
+      label: Checkpoint or LoRA details
+      description: If real checkpoints are involved, provide only generic names, source family, tensor-shape notes, or partial hashes. Do not upload proprietary models.
+      placeholder: |
+        model A: base_model_a.safetensors, sha256 starts with abc123
+        model B: base_model_b.safetensors, sha256 starts with def456
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I did not attach checkpoints, LoRAs, generated images, or large binary artifacts.
+          required: true
+        - label: I removed private local paths or account names from logs and config snippets.
+          required: true
+        - label: I can reproduce this with the command or YAML shown above.
+          required: true
