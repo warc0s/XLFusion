@@ -1,0 +1,82 @@
+name: Feature request
+description: Propose an improvement to XLFusion
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        XLFusion prioritizes reproducible SDXL checkpoint merging, validation, metadata, and testable workflows. Please describe the workflow problem before proposing UI or option changes.
+  - type: input
+    id: xlfusion-version
+    attributes:
+      label: XLFusion version
+      placeholder: "2.4.1"
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "Python 3.10.14"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Ubuntu 24.04, Windows 11, macOS 15"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode affected
+      multiple: true
+      options:
+        - CLI
+        - GUI
+        - batch
+        - analysis
+        - algebra
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow or problem
+      description: What SDXL merge workflow is hard, unsafe, or not reproducible today?
+    validations:
+      required: true
+  - type: textarea
+    id: command-or-yaml
+    attributes:
+      label: Current command or YAML
+      description: If relevant, include the current command or batch YAML. Remove private paths and proprietary model names.
+      render: yaml
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed behavior
+      description: What should XLFusion do differently?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing flags, batch config patterns, presets, or manual steps you tried.
+  - type: textarea
+    id: checkpoint-info
+    attributes:
+      label: Checkpoint or LoRA context
+      description: If real checkpoints are relevant, provide only generic names or partial hashes. Do not upload proprietary models.
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: This request does not require committing checkpoints, LoRAs, generated images, or large binary artifacts.
+          required: true
+        - label: I described the reproducibility or maintenance impact, not only a preference.
+          required: true
