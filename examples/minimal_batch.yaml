@@ -1,0 +1,29 @@
+# Minimal XLFusion batch example.
+#
+# Place these checkpoint files in workspace/models/ before running:
+# - base_model_a.safetensors
+# - base_model_b.safetensors
+#
+# Validate without merging:
+# python XLFusion.py --batch examples/minimal_batch.yaml --validate-only
+
+global_settings:
+  output_base: "example_output"
+  continue_on_error: false
+  max_parallel: 1
+  log_level: "INFO"
+
+batch_jobs:
+  - name: "minimal_legacy_merge"
+    mode: "legacy"
+    description: "Simple weighted merge with a stable backbone."
+    models:
+      - "base_model_a.safetensors"
+      - "base_model_b.safetensors"
+    weights: [0.65, 0.35]
+    backbone: 0
+    output_name: "MinimalLegacyMerge"
+    execution:
+      mode: "standard"
+      dtype: "float32"
+    only_unet: true
